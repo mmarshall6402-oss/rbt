@@ -32,7 +32,7 @@ jobs:
       IMAGE: ${{ vars.ECR_REPOSITORY_URL }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with: { role-to-assume: '${{ vars.DEPLOY_ROLE_ARN }}', aws-region: '${{ vars.AWS_REGION }}' }
 
       - name: Push the tested image to this environment's registry
