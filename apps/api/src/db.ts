@@ -18,6 +18,7 @@ export interface DB {
     role: Role;
     bacbId: string | null;
     fieldworkType: FieldworkType | null;
+    inviteCode: string | null;
     createdAt: Generated<Date>;
   };
   supervisions: {
