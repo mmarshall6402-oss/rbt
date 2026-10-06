@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { databaseUrl } from './config.js';
 
 const DEFAULT_DIR = fileURLToPath(new URL('../../../db/migrations/', import.meta.url));
 const LOCK_ID = 727274; // advisory lock: two deploys never migrate at once
@@ -40,8 +41,6 @@ export async function migrate(connectionString: string, dir = DEFAULT_DIR, log: 
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('Missing env DATABASE_URL');
-  const applied = await migrate(url, process.env.MIGRATIONS_DIR ?? DEFAULT_DIR, console.log);
+  const applied = await migrate(databaseUrl(), process.env.MIGRATIONS_DIR ?? DEFAULT_DIR, console.log);
   console.log(applied.length ? `${applied.length} migration(s) applied` : 'Database is up to date');
 }

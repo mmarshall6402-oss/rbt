@@ -106,3 +106,33 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-traces, path: apps/web/test-results, retention-days: 7 }
+
+  image:
+    name: API container image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with: { context: ., file: apps/api/Dockerfile, push: false, tags: fieldtrack-api:ci }
+
+  infra:
+    name: Terraform validate + security scan, workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive infra/terraform
+      - name: Validate each environment
+        run: |
+          for env in staging prod; do
+            terraform -chdir=infra/terraform/envs/$env init -backend=false -input=false
+            terraform -chdir=infra/terraform/envs/$env validate
+          done
+      - name: Security scan (skips are documented inline with reasons)
+        uses: bridgecrewio/checkov-action@v12
+        with: { directory: infra/terraform/modules/app, framework: terraform, quiet: true }
+      - name: Lint workflows
+        run: |
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color

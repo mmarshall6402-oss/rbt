@@ -37,7 +37,7 @@ export const SAFE_DATA_COLLECTION = {
 export const errorTracking = {
   enabled: false,
   init() {
-    const dsn = process.env.SENTRY_DSN;
+    const dsn = process.env.SENTRY_DSN?.trim(); // blank placeholder secret = off
     if (!dsn) return;
     Sentry.init({
       dsn,

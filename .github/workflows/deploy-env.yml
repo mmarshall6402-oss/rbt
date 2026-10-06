@@ -1,0 +1,77 @@
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment: { type: string, required: true }
+      rehearse_migrations: { type: boolean, default: false }
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      API_TASK_FAMILY: ${{ vars.API_TASK_FAMILY }}
+      MIGRATE_TASK_FAMILY: ${{ vars.MIGRATE_TASK_FAMILY }}
+      TASK_SUBNETS: ${{ vars.TASK_SUBNETS }}
+      TASK_SECURITY_GROUP: ${{ vars.TASK_SECURITY_GROUP }}
+      DB_INSTANCE_ID: ${{ vars.DB_INSTANCE_ID }}
+      DB_SUBNET_GROUP: ${{ vars.DB_SUBNET_GROUP }}
+      DB_SECURITY_GROUP: ${{ vars.DB_SECURITY_GROUP }}
+      DB_PARAMETER_GROUP: ${{ vars.DB_PARAMETER_GROUP }}
+      WEB_BUCKET: ${{ vars.WEB_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+      IMAGE: ${{ vars.ECR_REPOSITORY_URL }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with: { role-to-assume: '${{ vars.DEPLOY_ROLE_ARN }}', aws-region: '${{ vars.AWS_REGION }}' }
+
+      - name: Push the tested image to this environment's registry
+        uses: actions/download-artifact@v4
+        with: { name: api-image, path: /tmp }
+      - run: |
+          docker load -i /tmp/api.tar
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${IMAGE%%/*}"
+          docker tag "api:${{ github.sha }}" "$IMAGE"
+          docker push "$IMAGE"
+
+      - name: Rehearse migrations on a point-in-time clone of the live database
+        if: inputs.rehearse_migrations
+        run: infra/scripts/ecs.sh rehearse_migrations "$IMAGE"
+
+      - name: Migrate
+        run: infra/scripts/ecs.sh run_migrations "$IMAGE"
+
+      - name: Roll out API (circuit breaker rolls back a failing image)
+        run: infra/scripts/ecs.sh deploy_api "$IMAGE"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Build web for this environment
+        run: pnpm --filter @fieldtrack/web build
+        env:
+          VITE_AUTH_MODE: cognito
+          VITE_COGNITO_AUTHORITY: ${{ vars.COGNITO_AUTHORITY }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          VITE_COGNITO_DOMAIN: ${{ vars.COGNITO_DOMAIN }}
+          VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN_WEB }}
+          VITE_APP_ENV: ${{ inputs.environment }}
+          VITE_RELEASE: ${{ github.sha }}
+      - name: Publish web
+        run: infra/scripts/ecs.sh publish_web apps/web/dist
+
+      - name: Smoke test
+        run: |
+          for _ in $(seq 1 10); do curl -fsS "${{ vars.APP_URL }}/api/health" && exit 0; sleep 6; done
+          echo "::error::Health check failed after deploy"; exit 1
