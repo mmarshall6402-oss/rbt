@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm --filter @fieldtrack/rules test
+      - run: pnpm --filter @fieldtrack/web build
+
+  api:
+    name: API + database tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: fieldtrack_test }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @fieldtrack/api test
+        env: { TEST_DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/fieldtrack_test' }
+
+  migrations:
+    name: Migrations apply cleanly on main's schema with data
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: fieldtrack }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/fieldtrack
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Frozen migrations are unchanged
+        run: |
+          base="origin/${{ github.base_ref }}"
+          git show "$base:db/migrations/.frozen" 2>/dev/null | while read -r f; do
+            [ -z "$f" ] && continue
+            if ! git diff --quiet "$base" -- "db/migrations/$f"; then echo "::error::$f already ran in production. Write a new migration instead of editing it."; exit 1; fi
+          done
+      - name: Build main's schema and load realistic data
+        run: |
+          mkdir -p /tmp/base && git archive "origin/${{ github.base_ref }}" db/migrations | tar -x -C /tmp/base
+          MIGRATIONS_DIR=/tmp/base/db/migrations pnpm db:migrate
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed/sample.sql
+      - name: Apply this PR's migrations on top
+        run: pnpm db:migrate
+      - name: Re-running is a no-op
+        run: pnpm db:migrate | grep -q "Database is up to date"
+      - name: Data survived
+        run: |
+          test "$(psql "$DATABASE_URL" -tAc 'select count(*) from entries')" -gt 150
+          test "$(psql "$DATABASE_URL" -tAc 'select count(*) from audit_log')" -gt 150
+
+  e2e:
+    name: End-to-end (real browser, production build)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: fieldtrack }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/fieldtrack
+      E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/fieldtrack
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm --filter @fieldtrack/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @fieldtrack/web e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-traces, path: apps/web/test-results, retention-days: 7 }
