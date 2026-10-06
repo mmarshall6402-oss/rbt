@@ -119,7 +119,7 @@ begin
   end if;
   if month_locked(new.trainee_id, new.supervisor_id, new.work_date)
      or (tg_op = 'UPDATE' and month_locked(old.trainee_id, old.supervisor_id, old.work_date)) then
-    raise exception 'month is signed and locked';
+    raise exception 'month is signed and locked' using errcode = 'object_not_in_prerequisite_state'; -- 55000, API maps to 409
   end if;
   new.updated_at := now();
   return new;
