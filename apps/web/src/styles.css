@@ -140,3 +140,12 @@ tr.desc td { white-space: normal; color: var(--muted); font-size: 13px; padding-
 }
 @media (prefers-reduced-motion: reduce) { .ring-fill { transition: none; } }
 @media (forced-colors: active) { .ring-fill { stroke: CanvasText; } .ring-track { stroke: GrayText; } }
+
+/* Sync + history */
+.sync { font-size: 13px; font-weight: 500; color: var(--muted); padding: 6px 10px; }
+.sync-offline, .sync-error { color: var(--ink); border: 1px dashed var(--ink); }
+.rejected { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 20; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 10px; max-width: calc(100vw - 32px); }
+.rejected button { color: var(--bg); }
+.history { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.history li { line-height: 1.4; }
+.delta { font-variant-numeric: tabular-nums; }

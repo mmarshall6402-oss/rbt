@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { formatHours, ruleSetFor, type FieldworkType, type MonthResult } from '@fieldtrack/rules';
 import { signOut } from '../auth';
+import { wipeDevice } from '../query';
+import { dismissRejected, flush, pendingOps, useSyncState } from '../sync';
 
 export const hrs = (min: number) => formatHours(min, 2);
 export const currentMonth = () => new Date().toLocaleDateString('en-CA').slice(0, 7);
@@ -128,6 +130,30 @@ export function ThemeToggle() {
   );
 }
 
+async function safeSignOut() {
+  await flush();
+  const n = pendingOps().length;
+  if (n && !confirm(`${n} change(s) haven't uploaded yet and will be lost if you sign out now. Sign out anyway?`)) return;
+  await wipeDevice(); // cached records can include client notes: never leave them on a shared device
+  await signOut();
+}
+
+/** Cloud indicator: synced, uploading, or saved on this device while offline. */
+export function SyncBadge() {
+  const s = useSyncState();
+  const label = s.status === 'synced' ? '✓ Synced' : s.status === 'syncing' ? '↻ Saving…' : s.status === 'offline' ? `☁ Saved on this device · ${s.pending} waiting` : `⚠ Upload paused · ${s.pending} waiting`;
+  return (
+    <>
+      <button className={`ghost sync sync-${s.status}`} onClick={() => void flush()} title="Changes save on this device first, then upload automatically" aria-live="polite">{label}</button>
+      {s.rejected.length > 0 && (
+        <div className="rejected" role="alert">
+          {s.rejected.map(r => <p key={r.id + r.at}>⚠ A change couldn't be saved: {r.message} <button className="ghost small" onClick={() => dismissRejected(r.id)}>Dismiss</button></p>)}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function AppShell({ name, children, nav }: { name: string; nav?: ReactNode; children: ReactNode }) {
   return (
     <>
@@ -137,7 +163,7 @@ export function AppShell({ name, children, nav }: { name: string; nav?: ReactNod
         <div className="topbar-right">
           <ThemeToggle />
           <span className="muted hide-sm">{name}</span>
-          <button className="ghost" onClick={() => void signOut()}>Sign out</button>
+          <button className="ghost" onClick={() => void safeSignOut()}>Sign out</button>
         </div>
       </header>
       <main className="app">{children}</main>
