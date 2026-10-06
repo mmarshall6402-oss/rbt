@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fieldtrack</title>
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--ink:#1b2333;--mut:#667085;--pri:#2563eb;--ok:#16a34a;--bad:#dc2626;--ln:#e4e7ec;--ind:#e0f7f7;--sup:#efe7ff}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1420;--card:#171e2d;--ink:#e6e9f0;--mut:#98a2b3;--pri:#60a5fa;--ok:#4ade80;--bad:#f87171;--ln:#2a3345;--ind:#12343a;--sup:#2a2145}}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.45 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink)}
+main{max-width:1100px;margin:auto;padding:16px;display:grid;gap:16px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+h1{margin:0;font-size:22px}h2{margin:0 0 12px;font-size:17px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:16px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+label{display:grid;gap:4px;font-size:13px;color:var(--mut)}
+input,select,textarea,button{font:inherit;padding:9px 10px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--ink);width:100%}
+textarea{min-height:80px;resize:vertical}
+button{cursor:pointer;width:auto}
+.pri{background:var(--pri);color:#fff;border:0;font-weight:600}
+.seg{display:flex;gap:8px}
+.seg input{position:absolute;opacity:0;width:1px;height:1px}
+.seg input:focus-visible+span{outline:2px solid var(--pri)}
+.seg span{flex:1;display:block;text-align:center;padding:10px;border:2px solid var(--ln);border-radius:10px;cursor:pointer;color:var(--ink);font-weight:600}
+.seg label{flex:1}
+.seg input:checked+span{border-color:var(--pri);background:color-mix(in srgb,var(--pri) 12%,transparent)}
+.sup-only{display:none}form.sup .sup-only{display:grid}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stat b{display:block;font-size:24px}.stat{color:var(--mut);font-size:13px}
+ul.req{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.req li::before{content:"✓ ";color:var(--ok);font-weight:700}
+.req li.no::before{content:"✗ ";color:var(--bad)}
+.req small{color:var(--bad);display:block;margin-left:18px}
+.bar{height:10px;background:var(--ln);border-radius:5px;overflow:hidden}.bar i{display:block;height:100%;background:var(--pri)}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:8px;border-bottom:1px solid var(--ln);text-align:left;white-space:nowrap}
+td.desc{white-space:normal;color:var(--mut);font-size:13px;padding-top:0}
+tr.ind td:first-child{border-left:4px solid #14b8a6}tr.sup td:first-child{border-left:4px solid #8b5cf6}
+.muted{color:var(--mut);font-size:13px}
+@media print{form,.noprint{display:none!important}body{background:#fff;color:#000}.card{border:0}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Fieldtrack <span class="muted">BCBA fieldwork hours</span></h1>
+  <label style="width:auto">Fieldwork type
+    <select id="ftype"><option value="concentrated">Concentrated (10%)</option><option value="supervised">Supervised (5%)</option></select>
+  </label>
+</header>
+
+<form id="f" class="card">
+  <h2 id="ftitle">Log hours</h2>
+  <div class="grid">
+    <label>Date<input type="date" name="date" required></label>
+    <label>Start<input type="time" name="start" required></label>
+    <label>End<input type="time" name="end" required></label>
+    <label>Supervisor<input name="supervisor" list="sups" required></label>
+  </div>
+  <div class="seg" style="margin:14px 0">
+    <label><input type="radio" name="kind" value="ind" checked><span>Independent<br><small class="muted">BCBA not present</small></span></label>
+    <label><input type="radio" name="kind" value="sup"><span>Supervised<br><small class="muted">BCBA present</small></span></label>
+  </div>
+  <div class="grid">
+    <label>Restricted hours <small>(rest = unrestricted)</small><input type="number" name="restricted" min="0" step="0.05" value="0"></label>
+    <label class="sup-only">Supervision<select name="group"><option value="">Individual</option><option value="1">Group</option></select></label>
+    <label class="sup-only">Contact type<select name="contact"><option value="">None</option><option>Contact</option><option>Observation</option></select></label>
+    <label class="sup-only">Format<select name="format"><option>In person</option><option>Online</option></select></label>
+  </div>
+  <label style="margin-top:12px">Description of activity<textarea name="desc"></textarea></label>
+  <div class="actions" style="margin-top:12px">
+    <button class="pri" type="submit">Save</button>
+    <button type="button" id="cancel" hidden>Cancel edit</button>
+    <span id="dur" class="muted"></span>
+  </div>
+  <datalist id="sups"></datalist>
+</form>
+
+<section class="card">
+  <div class="actions" style="justify-content:space-between;margin-bottom:12px">
+    <h2 style="margin:0" id="mtitle"></h2>
+    <div class="actions noprint">
+      <input type="month" id="month" style="width:auto">
+      <button id="csv">Export CSV</button>
+      <button onclick="print()">Print</button>
+    </div>
+  </div>
+  <div class="grid" id="stats"></div>
+  <ul class="req" id="req" style="margin-top:16px"></ul>
+</section>
+
+<section class="card scroll">
+  <table>
+    <thead><tr><th>Date</th><th>Time</th><th>Supervisor</th><th>Type</th><th>Restr.</th><th>Unrestr.</th><th>Contact</th><th>Format</th><th>Hours</th><th class="noprint"></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Overall progress</h2>
+  <div id="overall"></div>
+  <div class="actions noprint" style="margin-top:12px">
+    <button id="backup">Download backup</button>
+    <label style="width:auto"><span class="muted">Restore backup</span><input type="file" id="restore" accept=".json"></label>
+  </div>
+  <p class="muted">Data is stored only in this browser. Download a backup regularly.</p>
+</section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s), KEY = 'fieldtrack.v1';
+const RULES = {supervised: {pct: .05, contacts: 4, goal: 2000}, concentrated: {pct: .10, contacts: 6, goal: 1500}};
+let db = {entries: [], type: 'concentrated'}, editing = null;
+try { Object.assign(db, JSON.parse(localStorage.getItem(KEY))) } catch {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)) } catch { alert('Save failed — download a backup now.') } };
+
+const mins = t => { const [h, m] = t.split(':'); return h * 60 + +m };
+const hrs = e => (mins(e.end) - mins(e.start)) / 60;
+const fmt = n => (+n).toFixed(2);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const t12 = t => new Date(`2000-01-01T${t}`).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+const f = $('#f'), month = $('#month');
+
+function stats(list) {
+  const s = {total: 0, ind: 0, sup: 0, group: 0, restr: 0, contacts: 0, obs: 0};
+  for (const e of list) {
+    const h = hrs(e);
+    s.total += h; s[e.kind] += h; s.restr += +e.restricted || 0;
+    if (e.kind === 'sup') { if (e.group) s.group += h; if (e.contact) s.contacts++; if (e.contact === 'Observation') s.obs++ }
+  }
+  return s;
+}
+
+function checks(s) {
+  const r = RULES[db.type], needSup = (r.pct * s.total - s.sup) / (1 - r.pct); // extra supervised hrs to hit %
+  return [
+    [s.total >= 20, 'Minimum 20 total hours', `${fmt(20 - s.total)} hours still needed`],
+    [s.total <= 130, 'Maximum 130 total hours', `${fmt(s.total - 130)} hours over the cap`],
+    [s.total > 0 && needSup <= 1e-9, `Minimum ${r.pct * 100}% supervision`, `${fmt(Math.max(needSup, 0))} supervised hours needed`],
+    [s.group <= s.sup / 2, 'Maximum 50% group supervision', `${fmt(s.group - s.sup / 2)} group hours over`],
+    [s.contacts >= r.contacts, `Minimum ${r.contacts} supervisor contacts`, `${r.contacts - s.contacts} contact(s) still needed`],
+    [s.obs >= 1, 'Minimum 1 observation with client', '1 observation still needed'],
+  ];
+}
+
+function render() {
+  const m = month.value, list = db.entries.filter(e => e.date.startsWith(m)).sort((a, b) => (b.date + b.start).localeCompare(a.date + a.start));
+  const s = stats(list);
+  $('#mtitle').textContent = new Date(m + '-02').toLocaleDateString([], {month: 'long', year: 'numeric'});
+  $('#stats').innerHTML = [['Total hours', fmt(s.total)], ['Independent', fmt(s.ind)], ['Supervised', fmt(s.sup)],
+    ['% supervised', s.total ? (s.sup / s.total * 100).toFixed(1) + '%' : '—']].map(([k, v]) => `<div class="stat">${k}<b>${v}</b></div>`).join('');
+  $('#req').innerHTML = checks(s).map(([ok, t, why]) => `<li class="${ok ? '' : 'no'}">${t}${ok ? '' : `<small>${why}</small>`}</li>`).join('');
+  $('#rows').innerHTML = list.map(e => { const h = hrs(e), r = +e.restricted || 0; return `
+    <tr class="${e.kind}"><td>${e.date}</td><td>${t12(e.start)}–${t12(e.end)}</td><td>${esc(e.supervisor)}</td>
+    <td>${e.kind === 'ind' ? 'Independent' : e.group ? 'Supervised (group)' : 'Supervised'}</td><td>${fmt(r)}</td><td>${fmt(h - r)}</td>
+    <td>${esc(e.contact)}</td><td>${e.kind === 'sup' ? esc(e.format) : ''}</td><td><b>${fmt(h)}</b></td>
+    <td class="noprint"><button onclick="edit('${e.id}')">Edit</button> <button onclick="del('${e.id}')">Delete</button></td></tr>
+    ${e.desc ? `<tr><td class="desc" colspan="10">${esc(e.desc)}</td></tr>` : ''}`}).join('') || '<tr><td colspan="10" class="muted">No hours logged this month.</td></tr>';
+
+  // Overall: only months meeting every requirement count, capped at 130
+  const months = [...new Set(db.entries.map(e => e.date.slice(0, 7)))];
+  let counted = 0, all = stats(db.entries);
+  for (const mm of months) { const ms = stats(db.entries.filter(e => e.date.startsWith(mm))); if (checks(ms).every(c => c[0])) counted += Math.min(ms.total, 130) }
+  const goal = RULES[db.type].goal, unres = all.total ? (1 - all.restr / all.total) * 100 : 0;
+  $('#overall').innerHTML = `<p><b>${fmt(counted)}</b> / ${goal} countable hours <span class="muted">(${fmt(all.total)} logged; only months meeting all requirements count)</span></p>
+    <div class="bar"><i style="width:${Math.min(counted / goal * 100, 100)}%"></i></div>
+    <ul class="req" style="margin-top:12px"><li class="${unres >= 60 || !all.total ? '' : 'no'}">Unrestricted ≥ 60% of all hours — currently ${unres.toFixed(1)}%</li></ul>`;
+  $('#sups').innerHTML = [...new Set(db.entries.map(e => e.supervisor))].map(v => `<option value="${esc(v)}">`).join('');
+}
+
+function syncForm() {
+  f.classList.toggle('sup', f.kind.value === 'sup');
+  const ok = f.start.value && f.end.value && f.end.value > f.start.value;
+  $('#dur').textContent = ok ? `${fmt(hrs({start: f.start.value, end: f.end.value}))} hours` : f.start.value && f.end.value ? 'End must be after start' : '';
+}
+
+function resetForm() {
+  editing = null; f.reset(); $('#ftitle').textContent = 'Log hours'; $('#cancel').hidden = true;
+  f.date.value = new Date().toLocaleDateString('en-CA'); f.supervisor.value = db.lastSup || ''; syncForm();
+}
+
+f.onsubmit = ev => {
+  ev.preventDefault();
+  const e = Object.fromEntries(new FormData(f)), h = hrs(e);
+  if (!(h > 0)) return alert('End time must be after start time.');
+  if (+e.restricted > h) return alert('Restricted hours exceed the session length.');
+  if (e.kind === 'ind') Object.assign(e, {group: '', contact: '', format: ''});
+  const clash = db.entries.find(x => x.id !== editing && x.date === e.date && mins(e.start) < mins(x.end) && mins(x.start) < mins(e.end));
+  if (clash && !confirm(`Overlaps with ${t12(clash.start)}–${t12(clash.end)} on this date. Save anyway?`)) return;
+  e.id = editing || crypto.randomUUID();
+  db.entries = db.entries.filter(x => x.id !== e.id).concat(e);
+  db.lastSup = e.supervisor; save();
+  month.value = e.date.slice(0, 7); resetForm(); render();
+};
+
+window.edit = id => {
+  const e = db.entries.find(x => x.id === id); editing = id;
+  for (const [k, v] of Object.entries(e)) if (f.elements[k]) f.elements[k].value = v;
+  $('#ftitle').textContent = 'Edit entry'; $('#cancel').hidden = false; syncForm(); f.scrollIntoView({behavior: 'smooth'});
+};
+window.del = id => { if (confirm('Delete this entry?')) { db.entries = db.entries.filter(x => x.id !== id); save(); render() } };
+
+const download = (name, text, type) => Object.assign(document.createElement('a'), {href: URL.createObjectURL(new Blob([text], {type})), download: name}).click();
+$('#csv').onclick = () => {
+  const head = ['Date', 'Start', 'End', 'Supervisor', 'Type', 'Group', 'Restricted', 'Unrestricted', 'Total', 'Contact', 'Format', 'Description'];
+  const rows = db.entries.filter(e => e.date.startsWith(month.value)).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))
+    .map(e => [e.date, e.start, e.end, e.supervisor, e.kind === 'ind' ? 'Independent' : 'Supervised', e.group ? 'Yes' : '', fmt(+e.restricted || 0), fmt(hrs(e) - (+e.restricted || 0)), fmt(hrs(e)), e.contact, e.format, e.desc]);
+  download(`fieldwork-${month.value}.csv`, [head, ...rows].map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
+};
+$('#backup').onclick = () => download(`fieldtrack-backup-${new Date().toLocaleDateString('en-CA')}.json`, JSON.stringify(db), 'application/json');
+$('#restore').onchange = async ev => {
+  try { const d = JSON.parse(await ev.target.files[0].text()); if (!Array.isArray(d.entries)) throw 0;
+    if (confirm(`Replace current data with ${d.entries.length} entries from backup?`)) { db = d; save(); $('#ftype').value = db.type; render() }
+  } catch { alert('Not a valid backup file.') }
+  ev.target.value = '';
+};
+
+$('#ftype').value = db.type;
+$('#ftype').onchange = e => { db.type = e.target.value; save(); render() };
+$('#cancel').onclick = resetForm;
+f.oninput = syncForm; month.onchange = render;
+month.value = new Date().toLocaleDateString('en-CA').slice(0, 7);
+resetForm(); render();
+</script>
+</body>
+</html>
