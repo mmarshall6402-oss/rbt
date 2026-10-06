@@ -1,0 +1,12 @@
+{
+  "name": "fieldtrack",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:up": "docker compose up -d db",
+    "db:reset": "docker compose down -v && docker compose up -d db"
+  }
+}
