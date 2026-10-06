@@ -13,6 +13,7 @@
     "dev:api": "pnpm --filter @fieldtrack/api dev",
     "test:db": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://fieldtrack:fieldtrack@localhost:5432/fieldtrack_test} pnpm test",
     "dev:web": "pnpm --filter @fieldtrack/web dev",
-    "build": "pnpm --filter @fieldtrack/web build"
+    "build": "pnpm --filter @fieldtrack/web build",
+    "db:migrate": "pnpm --filter @fieldtrack/api migrate"
   }
 }

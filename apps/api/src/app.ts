@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry } from '@fieldtrack/rules';
+import { durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import type { DB, User } from './db.js';
 
@@ -45,6 +45,33 @@ const newInviteCode = () => Array.from(randomBytes(8), b => CODE_ALPHABET[b % CO
 /** JSON with sorted keys: jsonb reorders keys, so compare snapshots canonically. */
 const canonical = (v: unknown) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
 
+const ENTRY_FIELDS = ['supervisorId', 'organizationId', 'workDate', 'startTime', 'endTime', 'kind', 'restrictedMinutes', 'isGroup', 'contact', 'format', 'description'] as const;
+// Snapshot keys arrive camelCased (CamelCasePlugin converts nested JSON keys too).
+const AUDIT_IGNORED = new Set(['id', 'traineeId', 'organizationId', 'createdAt', 'updatedAt']);
+type AuditRow = { id: string; rowId: string; action: string; at: Date; oldRow: unknown; newRow: unknown; actorId: string | null; actorName: string | null };
+type Snapshot = Record<string, unknown> | null;
+
+/** Minutes an audited row contributes to a month's total (0 if deleted or outside the month). */
+const countedMinutes = (r: Snapshot, month?: string) => {
+  if (!r || r.deletedAt || (month && !String(r.workDate).startsWith(month))) return 0;
+  return durationMinutes({ startTime: String(r.startTime).slice(0, 5), endTime: String(r.endTime).slice(0, 5) });
+};
+
+function describeChange(a: AuditRow, month?: string) {
+  const before = a.oldRow as Snapshot, after = a.newRow as Snapshot;
+  const action = a.action === 'UPDATE' && !before?.deletedAt && after?.deletedAt ? 'DELETE' : a.action === 'INSERT' ? 'CREATE' : a.action;
+  const changes = action === 'UPDATE' && before && after
+    ? Object.keys(after).filter(k => !AUDIT_IGNORED.has(k) && JSON.stringify(before[k]) !== JSON.stringify(after[k])).map(field => ({ field, from: before[field], to: after[field] }))
+    : [];
+  return {
+    auditId: a.id, entryId: a.rowId, at: a.at, action,
+    actor: a.actorId ? { id: a.actorId, name: a.actorName ?? 'Unknown' } : null,
+    workDate: String((after ?? before)?.workDate ?? ''),
+    minutesDelta: countedMinutes(after, month) - countedMinutes(before, month),
+    changes,
+  };
+}
+
 const publicEntry = ({ traineeId, organizationId, deletedAt, ...e }: EntryRow) => e;
 const publicUser = ({ cognitoSub, ...u }: User) => u;
 
@@ -58,6 +85,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.message });
     if (code === '55000') return reply.code(409).send({ error: 'This month is signed and locked' });
     if (code === '23505') return reply.code(409).send({ error: 'Already exists' });
+    if (code === '42501') return reply.code(404).send({ error: 'Not found' }); // refused by row-level security
     if ((err as { statusCode?: number }).statusCode === 400) return reply.code(400).send({ error: 'Invalid request' }); // malformed JSON etc.
     req.log.error({ code }, 'unhandled error'); // no message/stack: may contain row data
     return reply.code(500).send({ error: 'Internal error' });
@@ -69,13 +97,18 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     return id;
   }
 
-  /** Runs fn in a transaction as the authenticated user; sets app.user_id for the audit trigger. */
+  /** Drops to the RLS-restricted role for the rest of the transaction. app.user_id also feeds the audit trigger. */
+  const becomeUser = (trx: Trx, sub: string, userId = '') =>
+    sql`select set_config('app.sub', ${sub}, true), set_config('app.user_id', ${userId}, true), set_config('role', 'fieldtrack_app', true)`.execute(trx);
+
+  /** Runs fn in a transaction as the authenticated user; Postgres row-level security filters every query. */
   async function asUser<T>(req: FastifyRequest, fn: (trx: Trx, user: User) => Promise<T>) {
     const { sub } = await identity(req);
     return db.transaction().execute(async trx => {
+      await becomeUser(trx, sub);
       const user = await trx.selectFrom('users').selectAll().where('cognitoSub', '=', sub).executeTakeFirst();
       if (!user) throw new HttpError(403, 'No account for this login');
-      await sql`select set_config('app.user_id', ${user.id}, true)`.execute(trx);
+      await becomeUser(trx, sub, user.id);
       return fn(trx, user);
     });
   }
@@ -125,6 +158,10 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     return evaluateMonth(month, await listEntries(trx, { traineeId, supervisorId }, ...monthRange(month)), await traineeFieldwork(trx, traineeId));
   }
 
+  const auditRows = (trx: Trx) => trx.selectFrom('auditLog as a').leftJoin('users as u', 'u.id', 'a.actorId')
+    .select(['a.id', 'a.rowId', 'a.action', 'a.at', 'a.oldRow', 'a.newRow', 'a.actorId', 'u.fullName as actorName'])
+    .where('a.tableName', '=', 'entries').orderBy('a.id', 'asc');
+
   app.register(async api => {
     api.get('/health', async () => ({ ok: true }));
 
@@ -133,6 +170,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       const id = await identity(req);
       const body = SignupBody.parse(req.body);
       const user = await db.transaction().execute(async trx => {
+        await becomeUser(trx, id.sub);
         if (await trx.selectFrom('users').select('id').where('cognitoSub', '=', id.sub).executeTakeFirst()) throw new HttpError(409, 'Account already exists');
         return trx.insertInto('users').values({
           cognitoSub: id.sub, email: id.email, fullName: body.fullName, role: body.role, bacbId: body.bacbId || null,
@@ -150,7 +188,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       const { inviteCode, startsOn } = z.object({ inviteCode: z.string().trim().toUpperCase().length(8, 'Invite codes are 8 characters'), startsOn: z.iso.date().optional() }).parse(req.body);
       const res = await asUser(req, async (trx, user) => {
         requireRole(user, 'trainee');
-        const s = await trx.selectFrom('users').select(['id', 'fullName']).where('inviteCode', '=', inviteCode).where('role', '=', 'supervisor').executeTakeFirst();
+        const { rows: [s] } = await sql<{ id: string; fullName: string }>`select id, full_name from find_supervisor_by_code(${inviteCode})`.execute(trx);
         if (!s) throw new HttpError(404, 'No supervisor with that code');
         const link = await trx.insertInto('supervisions').values({ traineeId: user.id, supervisorId: s.id, startsOn: startsOn ?? today(), endsOn: null, organizationId: null })
           .returning(['id', 'startsOn']).executeTakeFirstOrThrow();
@@ -177,34 +215,59 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       return (await listEntries(trx, await scope(trx, user, traineeId), ...monthRange(month))).map(publicEntry);
     }));
 
-    api.post('/entries', async (req, reply) => {
+    /**
+     * Idempotent create-or-replace keyed by the client's UUID. Offline clients retry freely:
+     * a replay with identical data changes nothing (no update, no audit row), never a duplicate.
+     */
+    api.put('/entries/:id', async (req, reply) => {
+      const { id } = Id.parse(req.params);
       const body = EntryBody.parse(req.body);
       const res = await asUser(req, async (trx, user) => {
-        const { organizationId, warnings } = await checkEntry(trx, user, body);
-        const row = await trx.insertInto('entries').values({ ...body, traineeId: user.id, organizationId }).returningAll().executeTakeFirstOrThrow();
-        return { entry: publicEntry(row), warnings };
+        const existing = await trx.selectFrom('entries').select('deletedAt').where('id', '=', id).executeTakeFirst();
+        if (existing?.deletedAt) throw new HttpError(409, 'This entry was deleted');
+        const { organizationId, warnings } = await checkEntry(trx, user, body, id);
+        const values = { ...body, organizationId };
+        const changed = await trx.insertInto('entries').values({ id, traineeId: user.id, ...values })
+          .onConflict(oc => oc.column('id').doUpdateSet(values)
+            .where(eb => eb.or(ENTRY_FIELDS.map(f => eb(`entries.${f}`, 'is distinct from', eb.ref(`excluded.${f}`))))))
+          .returningAll().executeTakeFirst();
+        // No row back: either an identical replay, or the id belongs to someone else (RLS skipped the update).
+        const row = changed ?? await trx.selectFrom('entries').selectAll().where('id', '=', id).executeTakeFirst();
+        if (!row) throw new HttpError(404, 'Not found');
+        return { created: !existing, entry: publicEntry(row), warnings };
       });
-      return reply.code(201).send(res);
+      return reply.code(res.created ? 201 : 200).send({ entry: res.entry, warnings: res.warnings });
     });
-
-    api.patch('/entries/:id', req => asUser(req, async (trx, user) => {
-      const { id } = Id.parse(req.params);
-      const row = await trx.selectFrom('entries').selectAll().where('id', '=', id).where('traineeId', '=', user.id).where('deletedAt', 'is', null).executeTakeFirst();
-      if (!row) throw new HttpError(404, 'Not found');
-      const next = EntryBody.parse({ ...publicEntry(row), ...EntryBody.partial().parse(req.body) });
-      const { organizationId, warnings } = await checkEntry(trx, user, next, id);
-      const updated = await trx.updateTable('entries').set({ ...next, organizationId }).where('id', '=', id).returningAll().executeTakeFirstOrThrow();
-      return { entry: publicEntry(updated), warnings };
-    }));
 
     api.delete('/entries/:id', async (req, reply) => {
       const { id } = Id.parse(req.params);
       await asUser(req, async (trx, user) => {
-        const r = await trx.updateTable('entries').set({ deletedAt: new Date() }).where('id', '=', id).where('traineeId', '=', user.id).where('deletedAt', 'is', null).executeTakeFirst();
-        if (!r.numUpdatedRows) throw new HttpError(404, 'Not found');
+        const row = await trx.selectFrom('entries').select('deletedAt').where('id', '=', id).where('traineeId', '=', user.id).executeTakeFirst();
+        if (!row) throw new HttpError(404, 'Not found');
+        if (!row.deletedAt) await trx.updateTable('entries').set({ deletedAt: new Date() }).where('id', '=', id).execute(); // repeat deletes are no-ops
       });
       return reply.code(204).send();
     });
+
+    // ---- History: "why did my total change?" ----
+    api.get('/entries/:id/history', req => asUser(req, async trx => {
+      const { id } = Id.parse(req.params);
+      const rows = await auditRows(trx).where('a.rowId', '=', id).execute();
+      if (!rows.length) throw new HttpError(404, 'Not found');
+      return rows.map(r => describeChange(r));
+    }));
+
+    api.get('/changes', req => asUser(req, async (trx, user) => {
+      const { month, traineeId } = z.object({ month: Month }).extend(TraineeQuery.shape).parse(req.query);
+      const s = await scope(trx, user, traineeId);
+      const [from, to] = monthRange(month);
+      const inMonth = (col: 'a.oldRow' | 'a.newRow') => sql<boolean>`(${sql.ref(col)} ->> 'work_date') >= ${from} and (${sql.ref(col)} ->> 'work_date') < ${to}`;
+      const rows = await auditRows(trx)
+        .where(sql<boolean>`coalesce(a.new_row ->> 'trainee_id', a.old_row ->> 'trainee_id') = ${s.traineeId}`)
+        .where(eb => eb.or([inMonth('a.oldRow'), inMonth('a.newRow')]))
+        .execute();
+      return rows.map(r => describeChange(r, month)).filter(c => c.minutesDelta !== 0 || c.action !== 'UPDATE' || c.changes.length);
+    }));
 
     // ---- Requirements ----
     api.get('/months/:month', req => asUser(req, async (trx, user) => {

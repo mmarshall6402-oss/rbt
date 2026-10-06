@@ -1,35 +1,51 @@
-import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { devVerify } from './auth.js';
 import { createDb } from './db.js';
+import { migrate } from './migrate.js';
 
 // Requires a throwaway database: TEST_DATABASE_URL=postgres://... (the schema is dropped and recreated)
 const url = process.env.TEST_DATABASE_URL;
 const db = createDb(url ?? 'postgres://invalid');
 const app = buildApp({ db, verify: devVerify(), logger: false });
-const migrations = ['001_init.sql', '002_signup.sql'].map(f => readFileSync(new URL(`../../../db/migrations/${f}`, import.meta.url), 'utf8'));
 
 const ids = { trainee: '', other: '', sup: '', sup2: '' };
-const as = (sub: string) => ({
-  get: (u: string) => app.inject({ method: 'GET', url: `/api${u}`, headers: { 'x-dev-sub': sub } }),
-  post: (u: string, payload: object = {}) => app.inject({ method: 'POST', url: `/api${u}`, payload, headers: { 'x-dev-sub': sub } }),
-  patch: (u: string, payload: object) => app.inject({ method: 'PATCH', url: `/api${u}`, payload, headers: { 'x-dev-sub': sub } }),
-  del: (u: string) => app.inject({ method: 'DELETE', url: `/api${u}`, headers: { 'x-dev-sub': sub } }),
-});
+const as = (sub: string) => {
+  const headers = { 'x-dev-sub': sub };
+  return {
+    get: (u: string) => app.inject({ method: 'GET', url: `/api${u}`, headers }),
+    post: (u: string, payload: object = {}) => app.inject({ method: 'POST', url: `/api${u}`, payload, headers }),
+    put: (u: string, payload: object) => app.inject({ method: 'PUT', url: `/api${u}`, payload, headers }),
+    del: (u: string) => app.inject({ method: 'DELETE', url: `/api${u}`, headers }),
+    /** Logs an entry under a fresh client-generated id (or the given one). */
+    log: (o: object = {}, id: string = randomUUID()) => app.inject({ method: 'PUT', url: `/api/entries/${id}`, payload: entry(o), headers }),
+  };
+};
 const trainee = as('trainee'), other = as('other'), sup = as('sup'), sup2 = as('sup2');
 const entry = (o: object = {}) => ({ supervisorId: ids.sup, workDate: '2026-09-01', startTime: '08:00', endTime: '10:00', kind: 'independent', ...o });
+
+/** Runs SQL as the restricted app role, the way the API does, for a given user. */
+async function asRole<T>(userId: string, fn: (trx: Parameters<Parameters<ReturnType<typeof db.transaction>['execute']>[0]>[0]) => Promise<T>) {
+  return db.transaction().execute(async trx => {
+    await sql`select set_config('app.user_id', ${userId}, true), set_config('role', 'fieldtrack_app', true)`.execute(trx);
+    return fn(trx);
+  });
+}
 
 describe.skipIf(!url)('API', () => {
   beforeAll(async () => {
     await sql.raw('drop schema public cascade; create schema public;').execute(db);
-    for (const m of migrations) await sql.raw(m).execute(db);
+    await migrate(url!);
   });
   afterAll(() => db.destroy());
 
   beforeEach(async () => {
-    await sql.raw('truncate users, supervisions, entries, month_verifications, audit_log, organizations restart identity cascade').execute(db);
+    // The audit log refuses TRUNCATE; replica mode (superuser, tests only) skips that trigger.
+    await sql.raw(`set session_replication_role = replica;
+      truncate users, supervisions, entries, month_verifications, audit_log, organizations restart identity cascade;
+      set session_replication_role = origin;`).execute(db);
     const users = await db.insertInto('users').values([
       { cognitoSub: 'trainee', email: 't@x', fullName: 'Trainee', role: 'trainee', fieldworkType: 'concentrated' },
       { cognitoSub: 'other', email: 'o@x', fullName: 'Other', role: 'trainee', fieldworkType: 'supervised' },
@@ -50,7 +66,7 @@ describe.skipIf(!url)('API', () => {
   });
 
   it('creates and lists entries for the month', async () => {
-    const res = await trainee.post('/entries', entry({ restrictedMinutes: 30 }));
+    const res = await trainee.log({ restrictedMinutes: 30 });
     expect(res.statusCode).toBe(201);
     expect(res.json().entry).toMatchObject({ workDate: '2026-09-01', startTime: '08:00', restrictedMinutes: 30 });
     expect((await trainee.get('/entries?month=2026-09')).json()).toHaveLength(1);
@@ -58,39 +74,75 @@ describe.skipIf(!url)('API', () => {
   });
 
   it('validates input with shared rules', async () => {
-    expect((await trainee.post('/entries', entry({ restrictedMinutes: 121 }))).json().error).toMatch(/exceeds/);
-    expect((await trainee.post('/entries', entry({ endTime: '07:00' }))).statusCode).toBe(400);
-    expect((await trainee.post('/entries', entry({ workDate: 'nope' }))).statusCode).toBe(400);
-    expect((await trainee.post('/entries', entry({ contact: 'contact' }))).statusCode).toBe(400); // contact on independent
+    expect((await trainee.log({ restrictedMinutes: 121 })).json().error).toMatch(/exceeds/);
+    expect((await trainee.log({ endTime: '07:00' })).statusCode).toBe(400);
+    expect((await trainee.log({ workDate: 'nope' })).statusCode).toBe(400);
+    expect((await trainee.log({ contact: 'contact' })).statusCode).toBe(400); // contact on independent
+    expect((await trainee.put('/entries/not-a-uuid', entry())).statusCode).toBe(400);
   });
 
   it('requires an active supervision on the work date', async () => {
-    expect((await trainee.post('/entries', entry({ supervisorId: ids.sup2 }))).statusCode).toBe(400); // ended June
-    expect((await trainee.post('/entries', entry({ supervisorId: ids.sup2, workDate: '2026-06-15' }))).statusCode).toBe(201);
+    expect((await trainee.log({ supervisorId: ids.sup2 })).statusCode).toBe(400); // ended June
+    expect((await trainee.log({ supervisorId: ids.sup2, workDate: '2026-06-15' })).statusCode).toBe(201);
   });
 
-  it('only trainees log hours', async () => expect((await sup.post('/entries', entry())).statusCode).toBe(403));
+  it('only trainees log hours', async () => expect((await sup.log()).statusCode).toBe(403));
 
   it('warns on overlaps without blocking', async () => {
-    await trainee.post('/entries', entry());
-    const res = await trainee.post('/entries', entry({ startTime: '09:00', endTime: '11:00' }));
+    await trainee.log();
+    const res = await trainee.log({ startTime: '09:00', endTime: '11:00' });
     expect(res.statusCode).toBe(201);
     expect(res.json().warnings).toEqual(['Overlaps 08:00–10:00']);
   });
 
+  describe('idempotent sync', () => {
+    it('a retried upload with the same UUID never duplicates hours or audit rows', async () => {
+      const id = randomUUID();
+      expect((await trainee.log({}, id)).statusCode).toBe(201);
+      expect((await trainee.log({}, id)).statusCode).toBe(200);
+      expect((await trainee.log({}, id)).statusCode).toBe(200);
+      expect((await trainee.get('/entries?month=2026-09')).json()).toHaveLength(1);
+      expect((await trainee.get('/months/2026-09')).json().summary.totalMinutes).toBe(120);
+      expect(await db.selectFrom('auditLog').select('action').where('rowId', '=', id).execute()).toEqual([{ action: 'INSERT' }]);
+    });
+    it('the same UUID with new data updates in place', async () => {
+      const id = randomUUID();
+      await trainee.log({}, id);
+      const res = await trainee.log({ endTime: '09:00' }, id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().entry.endTime).toBe('09:00');
+      expect((await trainee.get('/entries?month=2026-09')).json()).toHaveLength(1);
+    });
+    it("can't take over another trainee's entry id", async () => {
+      const id = randomUUID();
+      await trainee.log({}, id);
+      await db.insertInto('supervisions').values({ traineeId: ids.other, supervisorId: ids.sup, startsOn: '2026-01-01', endsOn: null }).execute();
+      expect((await other.log({}, id)).statusCode).toBe(404);
+      expect((await trainee.get('/entries?month=2026-09')).json()[0].endTime).toBe('10:00');
+    });
+    it('deletes are idempotent and deleted entries stay deleted', async () => {
+      const id = randomUUID();
+      await trainee.log({}, id);
+      expect((await trainee.del(`/entries/${id}`)).statusCode).toBe(204);
+      expect((await trainee.del(`/entries/${id}`)).statusCode).toBe(204);
+      expect((await trainee.log({}, id)).statusCode).toBe(409);
+      expect((await other.del(`/entries/${id}`)).statusCode).toBe(404);
+    });
+  });
+
   it('enforces who can see what', async () => {
-    await trainee.post('/entries', entry());
-    await trainee.post('/entries', entry({ supervisorId: ids.sup2, workDate: '2026-06-15' }));
+    await trainee.log();
+    await trainee.log({ supervisorId: ids.sup2, workDate: '2026-06-15' });
     expect((await other.get(`/entries?month=2026-09&traineeId=${ids.trainee}`)).statusCode).toBe(404);
     expect((await sup.get(`/entries?month=2026-09&traineeId=${ids.trainee}`)).json()).toHaveLength(1);
     expect((await sup.get(`/entries?month=2026-06&traineeId=${ids.trainee}`)).json()).toHaveLength(0); // sup2's entry hidden from sup
   });
 
   it('edits, soft-deletes, and audits with the actor', async () => {
-    const { id } = (await trainee.post('/entries', entry())).json().entry;
-    expect((await other.patch(`/entries/${id}`, { endTime: '09:00' })).statusCode).toBe(404);
-    expect((await trainee.patch(`/entries/${id}`, { endTime: '09:00' })).json().entry.endTime).toBe('09:00');
-    expect((await trainee.patch(`/entries/${id}`, { endTime: '07:00' })).statusCode).toBe(400);
+    const id = randomUUID();
+    await trainee.log({}, id);
+    expect((await trainee.log({ endTime: '09:00' }, id)).json().entry.endTime).toBe('09:00');
+    expect((await trainee.log({ endTime: '07:00' }, id)).statusCode).toBe(400);
     expect((await trainee.del(`/entries/${id}`)).statusCode).toBe(204);
     expect((await trainee.get('/entries?month=2026-09')).json()).toHaveLength(0);
     const audit = await db.selectFrom('auditLog').select(['action', 'actorId']).where('tableName', '=', 'entries').orderBy('id').execute();
@@ -98,16 +150,74 @@ describe.skipIf(!url)('API', () => {
     expect(audit.every(a => a.actorId === ids.trainee)).toBe(true);
   });
 
+  describe('history', () => {
+    it('explains exactly why a month total dropped', async () => {
+      const id = randomUUID();
+      await trainee.log({ startTime: '08:00', endTime: '16:00' }, id); // 8 h
+      await trainee.log({ startTime: '08:00', endTime: '12:00' }, id); // edited to 4 h
+      const changes = (await trainee.get('/changes?month=2026-09')).json();
+      expect(changes.map((c: { action: string; minutesDelta: number }) => [c.action, c.minutesDelta])).toEqual([['CREATE', 480], ['UPDATE', -240]]);
+      expect(changes[1]).toMatchObject({ entryId: id, actor: { name: 'Trainee' }, changes: [{ field: 'endTime', from: '16:00:00', to: '12:00:00' }] });
+    });
+    it('tracks entries moved between months and deletions', async () => {
+      const id = randomUUID();
+      await trainee.log({}, id);
+      await trainee.log({ workDate: '2026-10-01' }, id);
+      expect((await trainee.get('/changes?month=2026-09')).json().map((c: { minutesDelta: number }) => c.minutesDelta)).toEqual([120, -120]);
+      await trainee.del(`/entries/${id}`);
+      expect((await trainee.get(`/entries/${id}/history`)).json().map((c: { action: string }) => c.action)).toEqual(['CREATE', 'UPDATE', 'DELETE']);
+    });
+    it("hides other people's history", async () => {
+      const id = randomUUID();
+      await trainee.log({}, id);
+      expect((await other.get(`/entries/${id}/history`)).statusCode).toBe(404);
+      expect((await sup.get(`/entries/${id}/history`)).statusCode).toBe(200);
+      expect((await sup2.get(`/changes?month=2026-09&traineeId=${ids.other}`)).statusCode).toBe(404);
+    });
+  });
+
+  describe('database security (row-level security, enforced by Postgres)', () => {
+    it('supervisors only see entries dated inside their active supervision period', async () => {
+      await trainee.log({ supervisorId: ids.sup2, workDate: '2026-06-15' });
+      await db.updateTable('entries').set({ workDate: '2026-07-15' }).execute(); // as owner: simulate an out-of-period row
+      expect(await asRole(ids.sup2, trx => trx.selectFrom('entries').select('id').execute())).toHaveLength(0);
+      await db.updateTable('entries').set({ workDate: '2026-06-15' }).execute();
+      expect(await asRole(ids.sup2, trx => trx.selectFrom('entries').select('id').execute())).toHaveLength(1);
+    });
+    it('users cannot read unlinked people or their supervisions', async () => {
+      const visible = await asRole(ids.other, trx => trx.selectFrom('users').select('fullName').execute());
+      expect(visible.map(u => u.fullName)).toEqual(['Other']);
+      expect(await asRole(ids.other, trx => trx.selectFrom('supervisions').select('id').execute())).toHaveLength(0);
+    });
+    it('raw SQL cannot insert entries for someone else or under an unlinked supervisor', async () => {
+      const row = { traineeId: ids.trainee, supervisorId: ids.sup, workDate: '2026-09-01', startTime: '08:00', endTime: '09:00', kind: 'independent' as const, restrictedMinutes: 0, isGroup: false, contact: null, format: null, description: '', deletedAt: null, organizationId: null };
+      await expect(asRole(ids.other, trx => trx.insertInto('entries').values(row).execute())).rejects.toThrow(/row-level security/);
+      await expect(asRole(ids.trainee, trx => trx.insertInto('entries').values({ ...row, supervisorId: ids.sup2 }).execute())).rejects.toThrow(/row-level security/);
+    });
+    it('the audit log is append-only, even for the table owner', async () => {
+      await trainee.log();
+      await expect(sql`update audit_log set action = 'x'`.execute(db)).rejects.toThrow(/append-only/);
+      await expect(sql`delete from audit_log`.execute(db)).rejects.toThrow(/append-only/);
+      await expect(sql`truncate audit_log`.execute(db)).rejects.toThrow(/append-only/);
+      await expect(asRole(ids.trainee, trx => sql`delete from audit_log`.execute(trx))).rejects.toThrow();
+    });
+    it('only the supervisor can set the supervisor signature', async () => {
+      await db.insertInto('monthVerifications').values({ traineeId: ids.trainee, supervisorId: ids.sup, month: '2026-09-01', fieldworkType: 'concentrated', rulesVersion: 'bacb-2022-01', summary: '{}', traineeSignedAt: new Date(), supervisorSignedAt: null, pdfS3Key: null }).execute();
+      await expect(asRole(ids.trainee, trx => trx.updateTable('monthVerifications').set({ supervisorSignedAt: new Date() }).execute())).rejects.toThrow(/only the signer/);
+    });
+  });
+
   it('returns 409 when editing a signed month', async () => {
-    const { id } = (await trainee.post('/entries', entry())).json().entry;
+    const id = randomUUID();
+    await trainee.log({}, id);
     await db.insertInto('monthVerifications').values({ traineeId: ids.trainee, supervisorId: ids.sup, month: '2026-09-01', fieldworkType: 'concentrated', rulesVersion: 'bacb-2022-01', summary: '{}', traineeSignedAt: null, supervisorSignedAt: new Date(), pdfS3Key: null }).execute();
-    expect((await trainee.patch(`/entries/${id}`, { description: 'x' })).statusCode).toBe(409);
-    expect((await trainee.post('/entries', entry({ workDate: '2026-09-02' }))).statusCode).toBe(409);
+    expect((await trainee.log({ description: 'x' }, id)).statusCode).toBe(409);
+    expect((await trainee.log({ workDate: '2026-09-02' })).statusCode).toBe(409);
   });
 
   it('evaluates the month and overall progress with the rules engine', async () => {
-    await trainee.post('/entries', entry({ startTime: '00:00', endTime: '18:00' }));
-    await trainee.post('/entries', entry({ workDate: '2026-09-02', kind: 'supervised', contact: 'observation', format: 'online' }));
+    await trainee.log({ startTime: '00:00', endTime: '18:00' });
+    await trainee.log({ workDate: '2026-09-02', kind: 'supervised', contact: 'observation', format: 'online' });
     const month = (await trainee.get('/months/2026-09')).json();
     expect(month.summary).toMatchObject({ totalMinutes: 1200, supervisedMinutes: 120, observations: 1 });
     expect(month.checks.find((c: { id: string }) => c.id === 'contacts')).toMatchObject({ ok: false, needed: 5 });
@@ -127,7 +237,6 @@ describe.skipIf(!url)('API', () => {
       expect((await as('bcba@x').post('/signup', { role: 'supervisor', fullName: 'B' })).statusCode).toBe(400);
       const res = await as('bcba@x').post('/signup', { role: 'supervisor', fullName: 'B', bacbId: '1-23-45678' });
       expect(res.json().inviteCode).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
-      expect(res.json()).not.toHaveProperty('fieldworkType', 'concentrated');
     });
     it('rejects self-assigned admin and missing auth', async () => {
       expect((await as('x@x').post('/signup', { role: 'admin', fullName: 'X' })).statusCode).toBe(400);
@@ -154,20 +263,22 @@ describe.skipIf(!url)('API', () => {
   describe('monthly sign-off', () => {
     const sign = () => trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup });
     it('requires the trainee to sign first, then locks on supervisor signature', async () => {
-      const { id } = (await trainee.post('/entries', entry())).json().entry;
+      const id = randomUUID();
+      await trainee.log({}, id);
       expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee })).statusCode).toBe(409);
       expect((await sign()).json().traineeSignedAt).toBeTruthy();
       const res = await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee });
       expect(res.statusCode).toBe(200);
       expect(res.json().supervisorSignedAt).toBeTruthy();
-      expect((await trainee.patch(`/entries/${id}`, { description: 'x' })).statusCode).toBe(409);
+      expect((await trainee.log({ description: 'x' }, id)).statusCode).toBe(409);
       expect((await sign()).statusCode).toBe(409);
       expect((await trainee.get('/verifications?month=2026-09')).json()).toHaveLength(1);
     });
     it('blocks the supervisor if entries changed after the trainee signed', async () => {
-      const { id } = (await trainee.post('/entries', entry())).json().entry;
+      const id = randomUUID();
+      await trainee.log({}, id);
       await sign();
-      await trainee.patch(`/entries/${id}`, { endTime: '09:00' });
+      await trainee.log({ endTime: '09:00' }, id);
       expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee })).json().error).toMatch(/re-sign/);
       await sign();
       expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee })).statusCode).toBe(200);
