@@ -5,6 +5,10 @@ updates:
     schedule: { interval: weekly }
     groups:
       minor-and-patch: { update-types: [minor, patch] }
+    ignore:
+      - dependency-name: typescript # TS 7 (native compiler) is a deliberate future upgrade, not a weekly bump
+        update-types: [version-update:semver-major]
+      - dependency-name: '@playwright/test' # pinned to the browser build preinstalled in dev containers
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
