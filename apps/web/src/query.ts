@@ -1,8 +1,8 @@
 import { QueryClient } from '@tanstack/react-query';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { createStore, del, get, set } from 'idb-keyval';
-import { ApiError } from './api';
-import { clearDeviceData, onServerChange } from './sync';
+import { ApiError, type EntryDto } from './api';
+import { clearDeviceData, onConfirmed, onServerChange } from './sync';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +20,17 @@ const idb = createStore('fieldtrack-cache', 'queries');
 export const persister = createAsyncStoragePersister({
   storage: { getItem: k => get(k, idb), setItem: (k, v) => set(k, v, idb), removeItem: k => del(k, idb) },
   throttleTime: 250,
+});
+
+// Write each confirmed change into the cached lists right away. Otherwise an entry would vanish from
+// the screen between leaving the outbox and the refetch landing (and stay gone if the connection drops then).
+onConfirmed(c => {
+  for (const [key, list] of queryClient.getQueriesData<EntryDto[]>({ queryKey: ['entries'] })) {
+    if (!list || key[2]) continue; // trainee's own lists only
+    const id = c.kind === 'put' ? c.entry.id : c.id;
+    const rest = list.filter(e => e.id !== id);
+    queryClient.setQueryData(key, c.kind === 'put' && c.entry.workDate.startsWith(String(key[1])) ? [...rest, c.entry] : rest);
+  }
 });
 
 // After the outbox drains (or the server rejects a change), refetch server truth.

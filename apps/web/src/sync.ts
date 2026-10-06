@@ -27,6 +27,10 @@ const ready = get<Op[]>('queue', store).then(q => { queue = q ?? []; emit({}); v
 export const useSyncState = () => useSyncExternalStore(cb => (listeners.add(cb), () => listeners.delete(cb)), () => state);
 /** Called after the queue drains or an op is rejected, so callers can refetch server truth. */
 export const onServerChange = (fn: () => void) => (changeHandlers.add(fn), () => changeHandlers.delete(fn));
+/** Called the moment the server confirms an op, so cached lists hold the entry before it leaves the outbox. */
+type Confirmed = { kind: 'put'; entry: EntryDto } | { kind: 'delete'; id: string };
+const confirmHandlers = new Set<(c: Confirmed) => void>();
+export const onConfirmed = (fn: (c: Confirmed) => void) => (confirmHandlers.add(fn), () => confirmHandlers.delete(fn));
 export const pendingOps = () => queue;
 
 export async function enqueue(op: Op) {
@@ -50,8 +54,13 @@ export async function flush() {
     while (queue.length) {
       const op = queue[0]!;
       try {
-        if (op.kind === 'put') await api(`/entries/${op.id}`, 'PUT', op.body);
-        else await api(`/entries/${op.id}`, 'DELETE');
+        if (op.kind === 'put') {
+          const { entry } = await api<{ entry: EntryDto }>(`/entries/${op.id}`, 'PUT', op.body);
+          confirmHandlers.forEach(fn => fn({ kind: 'put', entry }));
+        } else {
+          await api(`/entries/${op.id}`, 'DELETE');
+          confirmHandlers.forEach(fn => fn({ kind: 'delete', id: op.id }));
+        }
       } catch (err) {
         const permanent = err instanceof ApiError && err.status >= 400 && err.status < 500 && ![401, 408, 429].includes(err.status);
         if (!permanent) {

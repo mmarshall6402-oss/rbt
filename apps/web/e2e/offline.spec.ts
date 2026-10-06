@@ -26,7 +26,7 @@ test('offline-first: instant save, survives offline reload, syncs once, retries 
   await context.setOffline(false);
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await expect(page.locator('.sync')).toHaveText('✓ Synced', { timeout: 15_000 });
-  expect(await serverCount()).toBe(2);
+  await expect.poll(serverCount).toBe(2);
 
   // The server saves the upload but the response is lost; the client retries the same UUID.
   let dropped = false;
@@ -35,9 +35,10 @@ test('offline-first: instant save, survives offline reload, syncs once, retries 
     return route.continue();
   });
   await logEntry(page, '2026-10-05', '15:00', '16:00');
+  // The badge already reads Synced from the previous step, so first wait for the dropped upload itself.
+  await expect.poll(() => dropped, { timeout: 10_000 }).toBe(true);
   await expect(page.locator('.sync')).toHaveText('✓ Synced', { timeout: 20_000 });
-  expect(dropped).toBe(true);
-  expect(await serverCount()).toBe(3); // not 4
+  await expect.poll(serverCount, { timeout: 10_000 }).toBe(3); // the retry updated in place: 3, not 4
 
   // Sign-out wipes unsent and cached data from the device
   await page.getByRole('button', { name: 'Sign out' }).click();
