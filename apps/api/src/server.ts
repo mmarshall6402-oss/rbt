@@ -1,3 +1,6 @@
+import { errorTracking } from './observability.js';
+errorTracking.init(); // before anything else, so startup errors are captured too
+
 import { buildApp } from './app.js';
 import { cognitoVerify, devVerify } from './auth.js';
 import { createDb } from './db.js';

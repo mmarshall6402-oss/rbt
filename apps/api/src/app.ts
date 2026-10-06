@@ -4,6 +4,7 @@ import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
 import { durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
+import { errorTracking } from './observability.js';
 import type { DB, User } from './db.js';
 
 export class HttpError extends Error {
@@ -87,7 +88,8 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     if (code === '23505') return reply.code(409).send({ error: 'Already exists' });
     if (code === '42501') return reply.code(404).send({ error: 'Not found' }); // refused by row-level security
     if ((err as { statusCode?: number }).statusCode === 400) return reply.code(400).send({ error: 'Invalid request' }); // malformed JSON etc.
-    req.log.error({ code }, 'unhandled error'); // no message/stack: may contain row data
+    req.log.error({ code }, 'unhandled error'); // no message/stack in logs: may contain row data
+    errorTracking.capture(err, { code, route: req.routeOptions.url });
     return reply.code(500).send({ error: 'Internal error' });
   });
 

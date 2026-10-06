@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@fieldtrack/rules": "workspace:*",
+    "@sentry/node": "^11.4.0",
     "aws-jwt-verify": "^5.2.1",
     "fastify": "^5.12.5",
     "kysely": "^0.29.6",

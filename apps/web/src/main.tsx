@@ -9,6 +9,7 @@ import { Signup } from './pages/Signup';
 import { TraineeDashboard } from './pages/Trainee';
 import { SupervisorDashboard, TraineeReview } from './pages/Supervisor';
 import { persister, queryClient } from './query';
+import { ErrorBoundary, initErrorTracking, setErrorUser } from './observability';
 import './styles.css';
 
 
@@ -18,12 +19,26 @@ function RequireUser({ role, children }: { role: Me['role']; children: (me: Me) 
   if (authStatus === 401) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname)}`} replace />;
   if (authStatus === 403) return <Navigate to="/signup" replace />;
   if (!me.data) return me.error ? <main className="center error">Couldn't load your account. {me.error.message}</main> : <main className="center muted">Loading…</main>;
+  setErrorUser(me.data.id); // opaque id only, never name or email
   if (me.data.role !== role) return <Navigate to={homeFor(me.data.role)} replace />;
   return children(me.data);
 }
 
+initErrorTracking();
+
+function Crash() {
+  return (
+    <main className="center stack">
+      <h1>Something went wrong</h1>
+      <p className="muted">Your saved hours are safe on this device and on our servers. The error was reported automatically.</p>
+      <button className="primary" onClick={() => location.reload()}>Reload</button>
+    </main>
+  );
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <ErrorBoundary fallback={<Crash />}>
     <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: 7 * 24 * 3600_000, buster: 'v1' }}>
       <BrowserRouter>
         <Routes>
@@ -38,5 +53,6 @@ createRoot(document.getElementById('root')!).render(
         </Routes>
       </BrowserRouter>
     </PersistQueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );
