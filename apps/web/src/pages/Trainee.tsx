@@ -9,6 +9,10 @@ const today = () => new Date().toLocaleDateString('en-CA');
 type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
 const blank = (supervisorId = '', workDate = today()): Draft =>
   ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', isGroup: false, contact: null, format: null, description: '' });
+const fromEntry = (e: EntryDto, workDate = e.workDate): Draft => ({
+  supervisorId: e.supervisorId, workDate, startTime: e.startTime, endTime: e.endTime, kind: e.kind, restrictedHours: String(e.restrictedMinutes / 60),
+  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description,
+});
 const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
   ...d, restrictedMinutes: Math.round((Number(restrictedHours) || 0) * 60),
   ...(d.kind === 'independent' ? { isGroup: false, contact: null, format: null } : { format: d.format ?? 'in_person' }),
@@ -26,7 +30,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
   const form = forms.find(f => f.supervisorId === picked) ?? forms[0];
   const result = { data: entries.data ? form ?? evaluateMonth(month, [], profile) : undefined, error: entries.error };
   const names = Object.fromEntries((supervisors.data ?? []).map(s => [s.id, s.fullName]));
-  const [editing, setEditing] = useState<EntryDto | null>(null);
+  const [editing, setEditing] = useState<EntryDto | null>(null), [copying, setCopying] = useState<EntryDto | null>(null);
 
   return (
     <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}>
@@ -59,7 +63,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         <section className="card">
           <h2>{editing ? 'Edit entry' : 'Log hours'}</h2>
           {supervisors.data && supervisors.data.length > 0
-            ? <EntryForm key={editing?.id ?? `new-${month}`} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} onDone={() => setEditing(null)} />
+            ? <EntryForm key={editing?.id ?? (copying ? `copy-${copying.id}` : `new-${month}`)} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} copyOf={copying} onDone={() => { setEditing(null); setCopying(null) }} />
             : <p className="muted">Link a supervisor to start logging.</p>}
         </section>
         <div className="stack">
@@ -74,7 +78,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
 
       <section className="card">
         <div className="row spread"><h2>Entries</h2><span className="row">Export all hours{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}`, `fieldwork-hours.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div>
-        <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} onEdit={e => { setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
+        <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} onEdit={e => { setCopying(null); setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} onRepeat={e => { setEditing(null); setCopying(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
       </section>
 
       <MonthChanges month={month} />
@@ -117,8 +121,8 @@ function LinkSupervisor({ first = false }: { first?: boolean }) {
   );
 }
 
-function EntryForm({ month, profile, supervisors, entries, editing, onDone }: { month: string; profile: Profile; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; onDone: () => void }) {
-  const [d, setD] = useState<Draft>(() => editing ? { ...editing, restrictedHours: String(editing.restrictedMinutes / 60) } : blank(supervisors[0]?.id, month === currentMonth() ? today() : `${month}-01`));
+function EntryForm({ month, profile, supervisors, entries, editing, copyOf, onDone }: { month: string; profile: Profile; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; copyOf?: EntryDto | null; onDone: () => void }) {
+  const [d, setD] = useState<Draft>(() => editing ? fromEntry(editing) : copyOf ? fromEntry(copyOf, today()) : blank(supervisors[0]?.id, month === currentMonth() ? today() : `${month}-01`));
   const [warnings, setWarnings] = useState<string[]>([]);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD(p => ({ ...p, [k]: v }));
   const change = useLocalChange();
@@ -136,7 +140,7 @@ function EntryForm({ month, profile, supervisors, entries, editing, onDone }: { 
     setWarnings(findOverlaps<EntryInput>([...sameDay, input]).filter(p => p.includes(input))
       .map(([a, b]) => { const o = a === input ? b : a; return `Overlaps ${time12(o.startTime)}–${time12(o.endTime)}` }));
     await change({ kind: 'put', id, body: input, queuedAt: Date.now() });
-    if (editing) onDone(); else setD(blank(d.supervisorId, d.workDate));
+    if (editing || copyOf) onDone(); else setD(blank(d.supervisorId, d.workDate));
   }
 
   return (
@@ -182,7 +186,7 @@ function EntryForm({ month, profile, supervisors, entries, editing, onDone }: { 
   );
 }
 
-export function EntriesTable({ entries, supervisors, onEdit, editable = false, isLocked = () => false }: { entries: EntryDto[]; supervisors: { id: string; fullName: string }[]; onEdit?: (e: EntryDto) => void; editable?: boolean; isLocked?: (e: EntryDto) => boolean }) {
+export function EntriesTable({ entries, supervisors, onEdit, onRepeat, editable = false, isLocked = () => false }: { entries: EntryDto[]; supervisors: { id: string; fullName: string }[]; onEdit?: (e: EntryDto) => void; onRepeat?: (e: EntryDto) => void; editable?: boolean; isLocked?: (e: EntryDto) => boolean }) {
   const change = useLocalChange();
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const name = (id: string) => supervisors.find(s => s.id === id)?.fullName ?? '—';
@@ -206,6 +210,7 @@ export function EntriesTable({ entries, supervisors, onEdit, editable = false, i
                 <td className="num"><strong>{hrs(total)}</strong></td>
                 <td className="actions-cell">
                   {!e.pending && <button className="ghost small" aria-expanded={historyFor === e.id} onClick={() => setHistoryFor(historyFor === e.id ? null : e.id)}>History</button>}
+                  {editable && <button className="ghost small" title="Copy to today" onClick={() => onRepeat?.(e)}>Repeat</button>}
                   {editable && isLocked(e) && <span className="muted small" title="Signed by your supervisor">🔒 Signed</span>}
                   {editable && !isLocked(e) && <>
                     <button className="ghost small" onClick={() => onEdit?.(e)}>Edit</button>

@@ -108,3 +108,18 @@ test('each supervisor’s form is checked on its own', async ({ page }) => {
   await page.getByLabel('Want to finish by').fill(ym(40));
   await expect(page.getByText(/h\/week/)).toBeVisible();
 });
+
+test('Repeat copies an entry to today in one click', async ({ page }) => {
+  const { trainee } = await seedPair();
+  const [s] = await call(trainee, '/supervisors');
+  const today = new Date().toLocaleDateString('en-CA');
+  const earlier = `${today.slice(0, 7)}-01`;
+  await call(trainee, `/entries/${crypto.randomUUID()}`, 'PUT', { supervisorId: s.id, workDate: earlier, startTime: '13:15', endTime: '16:45', kind: 'independent' });
+  await signInAs(page, trainee, '/app');
+  await page.getByRole('button', { name: 'Repeat' }).click();
+  await expect(page.getByLabel('Date', { exact: true })).toHaveValue(today);
+  await expect(page.locator('input[type=time]').nth(0)).toHaveValue('13:15');
+  await page.getByRole('button', { name: 'Save entry' }).click();
+  await expect(page.locator('.sync')).toHaveText('✓ Synced');
+  await expect(page.getByRole('button', { name: 'Repeat' })).toHaveCount(2);
+});
