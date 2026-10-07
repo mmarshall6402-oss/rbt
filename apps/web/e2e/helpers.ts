@@ -5,10 +5,10 @@ export const call = async (sub: string, path: string, method = 'GET', body?: unk
   (await fetch(API + path, { method, headers: { 'x-dev-sub': sub, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined })).json();
 
 /** Fresh supervisor + linked concentrated trainee, created through the API. */
-export async function seedPair() {
+export async function seedPair(supervisorName = 'Lorinda Otto') {
   const run = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
   const sup = `sup${run}@e2e.test`, trainee = `trainee${run}@e2e.test`;
-  const s = await call(sup, '/signup', 'POST', { role: 'supervisor', fullName: 'Lorinda Otto', bacbId: '1-11-11111' });
+  const s = await call(sup, '/signup', 'POST', { role: 'supervisor', fullName: supervisorName, bacbId: '1-11-11111' });
   await call(trainee, '/signup', 'POST', { role: 'trainee', fullName: 'Pat Trainee', fieldworkType: 'concentrated' });
   await call(trainee, '/supervisions', 'POST', { inviteCode: s.inviteCode, startsOn: '2026-01-01' });
   return { sup, trainee, inviteCode: s.inviteCode as string };

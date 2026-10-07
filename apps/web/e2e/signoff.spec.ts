@@ -96,9 +96,10 @@ test('supervisor only sees hours logged under them', async ({ page }) => {
 
 test('each supervisor’s form is checked on its own', async ({ page }) => {
   const { trainee } = await seedPair();
-  const second = await seedPair(); // borrow its supervisor
+  const second = await seedPair('Sam Second'); // borrow its supervisor
   await call(trainee, '/supervisions', 'POST', { inviteCode: second.inviteCode, startsOn: '2026-01-01' });
-  const [a, b] = await call(trainee, '/supervisors');
+  const sups: { id: string; fullName: string }[] = await call(trainee, '/supervisors');
+  const a = sups.find(s => s.fullName === 'Lorinda Otto')!, b = sups.find(s => s.fullName === 'Sam Second')!;
   const put = (supervisorId: string, workDate: string, endTime: string) =>
     call(trainee, `/entries/${crypto.randomUUID()}`, 'PUT', { supervisorId, workDate, startTime: '08:00', endTime, kind: 'independent' });
   await put(a.id, '2026-09-01', '20:00');
@@ -107,9 +108,9 @@ test('each supervisor’s form is checked on its own', async ({ page }) => {
   await signInAs(page, trainee, '/app?month=2026-09');
   const tabs = page.getByRole('radiogroup', { name: 'Verification form' }).getByRole('radio');
   await expect(tabs).toHaveCount(2);
-  await tabs.nth(1).click();
+  await tabs.filter({ hasText: 'Sam Second' }).click(); // order follows supervisor ids, so pick by name
   await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(1);
-  await tabs.nth(0).click();
+  await tabs.filter({ hasText: 'Lorinda Otto' }).click();
   await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(0);
 
   // Finish-by planner: next month is impossible for a whole program
