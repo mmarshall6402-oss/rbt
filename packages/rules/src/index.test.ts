@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, forecast, formatHours, planFor, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, forecast, formLost, formatHours, planFor, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
@@ -294,5 +294,20 @@ describe('asynchronous observation (recorded video, no real-time feedback)', () 
   });
   it('belongs on independent entries only', () => {
     expect(validateEntry({ ...sup('2026-09-03', '09:00', '11:00'), observedAsync: true })).toEqual([expect.stringMatching(/independent entry/)]);
+  });
+});
+
+describe('signing deadline (Handbook: unsigned by the end of the following month → no hours)', () => {
+  it('is lost only after the deadline, and only without timely signatures', () => {
+    expect(formLost('2026-09', '2026-10-31')).toBe(false); // still due
+    expect(formLost('2026-09', '2026-11-01')).toBe(true);
+    expect(formLost('2026-09', '2026-11-01', { traineeSignedAt: '2026-10-05T12:00:00Z', supervisorSignedAt: new Date('2026-10-31T23:00:00Z') })).toBe(false);
+    expect(formLost('2026-09', '2026-11-01', { traineeSignedAt: '2026-10-05', supervisorSignedAt: '2026-11-01' })).toBe(true); // supervisor late
+    expect(formLost('2026-09', '2027-03-01', { externalSignedOn: '2026-10-20' })).toBe(false); // signed on paper in time
+  });
+  it('a lost form counts nothing toward the program', () => {
+    const month = [ind('2026-09-01', '00:00', '18:00'), ...[2, 3, 4, 5, 6, 7].map(d => sup(`2026-09-0${d}`, '09:00', '09:30', { contact: d === 2 ? 'observation' : 'contact' }))];
+    const p = evaluateProgram(month, C22, undefined, undefined, () => true);
+    expect([p.countableMinutes, p.months[0]!.lost]).toEqual([0, true]);
   });
 });

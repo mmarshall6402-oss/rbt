@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
-import { api, download, profileOf, useBilling, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, formLost, signDeadline, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { api, download, profileOf, useBilling, useExternalSignatures, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { ImportHours } from './Import';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
@@ -34,6 +34,9 @@ export function TraineeDashboard({ me }: { me: Me }) {
   const form = forms.find(f => f.supervisorId === picked) ?? forms[0];
   const result = { data: entries.data ? form ?? evaluateMonth(month, [], profile) : undefined, error: entries.error };
   const names = Object.fromEntries((supervisors.data ?? []).map(s => [s.id, s.fullName]));
+  const externals = useExternalSignatures().data;
+  const lost = !!form && formLost(month, today(), { ...verifications.data?.find(v => v.supervisorId === form.supervisorId),
+    externalSignedOn: externals?.find(x => x.supervisorId === form.supervisorId && x.month.startsWith(month))?.signedOn ?? null });
   const [editing, setEditing] = useState<EntryDto | null>(null), [copying, setCopying] = useState<EntryDto | null>(null);
 
   return (
@@ -75,6 +78,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
           <section className="card">
             <h2>{monthLabel(month)} requirements{forms.length > 1 && form?.supervisorId && ` · ${names[form.supervisorId] ?? ''}`}</h2>
             <p className="muted small">{standardLabel(profile)}{forms.length > 1 && ' · checked separately for each supervisor’s form'}</p>
+            {lost && <p className="notice">⚠ This form wasn't signed by {signDeadline(month)}, so per the BACB none of its hours count. Signed it elsewhere in time? Record that under Monthly sign-off.</p>}
             {result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}
           </section>
           {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} withHours={new Set(forms.map(f => f.supervisorId))} />}
@@ -111,7 +115,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
 
 function useInvalidate() {
   const qc = useQueryClient();
-  return () => Promise.all(['entries', 'month', 'progress', 'verifications', 'supervisors', 'changes', 'history'].map(k => qc.invalidateQueries({ queryKey: [k] })));
+  return () => Promise.all(['entries', 'month', 'progress', 'verifications', 'supervisors', 'changes', 'history', 'external'].map(k => qc.invalidateQueries({ queryKey: [k] })));
 }
 
 /** Saves to the on-device outbox; lists re-render from it at once and uploading happens in the background. */
@@ -277,6 +281,8 @@ export function EntriesTable({ entries, supervisors, month, traineeId, onEdit, o
 function SignOff({ month, supervisors, me, edition, withHours }: { month: string; supervisors: Supervisor[]; me: Me; edition: Edition; withHours: Set<string | undefined> }) {
   const [signing, setSigning] = useState<string | null>(null);
   const verifications = useVerifications(month), invalidate = useInvalidate(), { pending } = useSyncState();
+  const ext = new Map((useExternalSignatures().data ?? []).filter(x => x.month.startsWith(month)).map(x => [x.supervisorId, x]));
+  const removeExt = useMutation({ mutationFn: (id: string) => api(`/external-signatures/${id}`, 'DELETE'), onSuccess: () => void invalidate() });
   const pdf = useMutation({ mutationFn: (s: Supervisor) => download(`/verifications/${month}/form.pdf?supervisorId=${s.id}`, `BACB monthly form ${month} ${s.fullName}.pdf`) });
   const sign = useMutation({
     mutationFn: (signature: string) => api(`/verifications/${month}/sign`, 'POST', { supervisorId: signing, signature, attest: true }),
@@ -294,7 +300,9 @@ function SignOff({ month, supervisors, me, edition, withHours }: { month: string
               {v?.supervisorSignedAt ? <span className="ok">✓ Signed & locked</span>
                 : v?.traineeSignedAt ? <span className="muted small">You signed · waiting on supervisor <button className="ghost small" disabled={pending > 0} onClick={() => setSigning(s.id)}>Re-sign</button></span>
                 : <button className="small" disabled={month > currentMonth() || sign.isPending || pending > 0} onClick={() => setSigning(s.id)}>Sign {monthLabel(month, true)}</button>}
-              {!v?.supervisorSignedAt && withHours.has(s.id) && <Deadline month={month} />}
+              {!v?.supervisorSignedAt && withHours.has(s.id) && (ext.get(s.id)
+                ? <span className="ok small">✓ Signed outside Fieldtrack {ext.get(s.id)!.signedOn} <button className="ghost small" onClick={() => removeExt.mutate(ext.get(s.id)!.id)}>Undo</button></span>
+                : <><Deadline month={month} />{month < currentMonth() && <OutsideSignature month={month} supervisorId={s.id} />}</>)}
               <button className="ghost small" disabled={pdf.isPending || pending > 0} onClick={() => pdf.mutate(s)}>BACB form (PDF)</button>
               {signing === s.id && <SignForm statements={ATTESTATIONS[edition].statements} name={me.fullName} cta={`Sign ${monthLabel(month, true)} for ${s.fullName}`} busy={sign.isPending || pending > 0} onSign={sign.mutate} onCancel={() => setSigning(null)} />}
             </li>
@@ -482,5 +490,20 @@ function GettingStarted({ me, linked, logged }: { me: Me; linked: boolean; logge
       <ol className="steps">{steps.map(s => <li key={s.label} className={s.done ? 'done' : ''}><span>{s.done ? '✓' : '○'}</span> {s.label}</li>)}</ol>
       <p className="muted small">New to how the BACB checks hours? <Link to="/help">Read the 2-minute guide</Link>.</p>
     </section>
+  );
+}
+
+/** For forms signed on paper or in another tracker: record when, so the deadline rule doesn't drop the month. */
+function OutsideSignature({ month, supervisorId }: { month: string; supervisorId: string }) {
+  const [open, setOpen] = useState(false), [date, setDate] = useState(''), invalidate = useInvalidate();
+  const save = useMutation({ mutationFn: () => api('/external-signatures', 'PUT', { supervisorId, month, signedOn: date }), onSuccess: () => { setOpen(false); void invalidate() } });
+  if (!open) return <button className="ghost small" onClick={() => setOpen(true)}>Signed outside Fieldtrack…</button>;
+  return (
+    <form className="row" onSubmit={e => { e.preventDefault(); save.mutate() }}>
+      <label>Date both of you had signed<input type="date" required value={date} max={today()} onChange={e => setDate(e.target.value)} /></label>
+      <button className="small" disabled={save.isPending}>Save</button>
+      <button type="button" className="ghost small" onClick={() => setOpen(false)}>Cancel</button>
+      <ErrorText error={save.error} />
+    </form>
   );
 }

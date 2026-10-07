@@ -83,5 +83,8 @@ export const useComments = (month: string, traineeId?: string) =>
   useQuery({ queryKey: ['comments', month, traineeId], queryFn: () => api<Comment[]>(`/comments?month=${month}${q(traineeId)}`) });
 export interface BillingStatus { enabled: boolean; status: string; currentPeriodEnd: string | null }
 export const useBilling = () => useQuery({ queryKey: ['billing'], queryFn: () => api<BillingStatus>('/billing') });
+export interface ExternalSignature { id: string; supervisorId: string; month: string; signedOn: string }
+export const useExternalSignatures = (traineeId?: string) =>
+  useQuery({ queryKey: ['external', traineeId], queryFn: () => api<ExternalSignature[]>(`/external-signatures?${q(traineeId).slice(1)}`) });
 export const useSupervisors = () => useQuery({ queryKey: ['supervisors'], queryFn: () => api<Supervisor[]>('/supervisors') });
 export const useTrainees = () => useQuery({ queryKey: ['trainees'], queryFn: () => api<Trainee[]>('/trainees') });

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type FormType, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, formLost, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type FormType, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
@@ -50,7 +50,6 @@ const editionOf = (rulesVersion: string) => (RULESETS['2027'].version === rulesV
 const TraineeQuery = z.object({ traineeId: z.uuid().optional() });
 const Id = z.object({ id: z.uuid() });
 
-const today = () => new Date().toISOString().slice(0, 10);
 const monthRange = (m: string) => {
   const [y, mo] = m.split('-').map(Number) as [number, number];
   return [`${m}-01`, new Date(Date.UTC(y, mo, 1)).toISOString().slice(0, 10)] as const; // [start, nextMonthStart)
@@ -98,7 +97,8 @@ const toCsv = (rows: unknown[][]) => rows.map(r => r.map(csvCell).join(',')).joi
 const publicEntry = ({ traineeId, organizationId, deletedAt, ...e }: EntryRow) => e;
 const publicUser = ({ cognitoSub, ...u }: User) => u;
 
-export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB>; verify: Verify; logger?: boolean; billing?: Billing | undefined }) {
+export function buildApp({ db, verify, logger = true, billing, clock = () => new Date() }: { db: Kysely<DB>; verify: Verify; logger?: boolean; billing?: Billing | undefined; clock?: () => Date }) {
+  const today = () => clock().toISOString().slice(0, 10); // injectable so deadline rules are testable
   // Never log bodies: descriptions are PHI.
   const app = Fastify({ logger: logger && { redact: ['req.headers.authorization', 'req.headers["x-dev-sub"]'] } });
 
@@ -189,6 +189,18 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
       .where('traineeId', '=', traineeId).where('supervisorSignedAt', 'is not', null).execute();
     const types = new Map(rows.map(r => [`${r.month.slice(0, 7)}|${r.supervisorId}`, r.fieldworkType]));
     return (month, supervisorId) => types.get(`${month}|${supervisorId}`);
+  }
+
+  /** Forms past the BACB signing deadline without timely signatures (in Fieldtrack, or recorded as signed outside it). */
+  async function lostForms(trx: Trx, traineeId: string) {
+    const [signed, external] = await Promise.all([
+      trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'traineeSignedAt', 'supervisorSignedAt']).where('traineeId', '=', traineeId).execute(),
+      trx.selectFrom('externalSignatures').select(['month', 'supervisorId', 'signedOn']).where('traineeId', '=', traineeId).execute(),
+    ]);
+    const key = (m: string, sid: string | undefined) => `${m.slice(0, 7)}|${sid}`;
+    const v = new Map(signed.map(r => [key(r.month, r.supervisorId), r])), x = new Map(external.map(r => [key(r.month, r.supervisorId), r.signedOn]));
+    const now = today();
+    return (month: string, sid: string | undefined) => formLost(month, now, { ...v.get(key(month, sid)), externalSignedOn: x.get(key(month, sid)) ?? null });
   }
 
   /** What a Final Fieldwork Verification Form reports for a pair: totals from their signed (locked) monthly forms, by fieldwork type. */
@@ -336,7 +348,7 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
           trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'supervisorSignedAt']).where('traineeId', '=', s.traineeId).where('supervisorSignedAt', 'is not', null)
             .$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).execute(),
         ]);
-        const program = evaluateProgram(entries, profile, undefined, await signedFormTypes(trx, s.traineeId));
+        const program = evaluateProgram(entries, profile, undefined, await signedFormTypes(trx, s.traineeId), await lostForms(trx, s.traineeId));
         return hoursLogPdf({
           trainee: { name: t.fullName, bacbId: t.bacbId }, entries, forms: program.months,
           standard: `${profile.credential?.toUpperCase()} · ${profile.type === 'concentrated' ? 'Concentrated' : 'Supervised'} · ${profile.edition} rules`,
@@ -441,7 +453,7 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
 
     api.get('/progress', req => asUser(req, async (trx, user) => {
       const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
-      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId), undefined, await signedFormTypes(trx, s.traineeId));
+      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId), undefined, await signedFormTypes(trx, s.traineeId), await lostForms(trx, s.traineeId));
     }));
 
     // ---- Monthly sign-off: trainee signs, then supervisor signs (which locks the month) ----
@@ -577,6 +589,33 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
     }));
 
     if (billing) stripeWebhook(api, db, billing);
+
+    // ---- Forms signed outside Fieldtrack (paper or another tracker): only used for the signing-deadline rule ----
+    api.get('/external-signatures', req => asUser(req, async (trx, user) => {
+      const { traineeId } = TraineeQuery.parse(req.query);
+      const s = await scope(trx, user, traineeId);
+      return trx.selectFrom('externalSignatures').select(['id', 'supervisorId', 'month', 'signedOn']).where('traineeId', '=', s.traineeId)
+        .$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).orderBy('month').execute();
+    }));
+
+    api.put('/external-signatures', req => asUser(req, async (trx, user) => {
+      requireRole(user, 'trainee');
+      const b = z.object({ supervisorId: z.uuid(), month: Month, signedOn: z.iso.date() }).parse(req.body);
+      const lastDay = new Date(Date.parse(monthRange(b.month)[1]) - 86_400_000).toISOString().slice(0, 10);
+      if (b.signedOn < lastDay) throw new HttpError(400, 'A monthly form is signed once the month is over');
+      if (b.signedOn > today()) throw new HttpError(400, "That date hasn't happened yet");
+      const values = { traineeId: user.id, supervisorId: b.supervisorId, month: `${b.month}-01`, signedOn: b.signedOn };
+      return (await trx.insertInto('externalSignatures').values(values).onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doNothing())
+        .returning(['id', 'month', 'signedOn']).executeTakeFirst()) ?? { alreadyRecorded: true };
+    }));
+
+    api.delete('/external-signatures/:id', async (req, reply) => {
+      const { id } = Id.parse(req.params);
+      await asUser(req, async trx => {
+        if (!(await trx.deleteFrom('externalSignatures').where('id', '=', id).executeTakeFirst()).numDeletedRows) throw new HttpError(404, 'Not found');
+      });
+      return reply.code(204).send();
+    });
   }, { prefix: '/api' });
 
   return app;

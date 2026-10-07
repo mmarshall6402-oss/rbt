@@ -165,6 +165,7 @@ export interface MonthResult {
   month: string;
   supervisorId?: string; // set when evaluated per verification form
   type?: FieldworkType; // the form's fieldwork type
+  lost?: boolean; // not signed by the BACB deadline: nothing counts
   rulesVersion: string;
   summary: MonthSummary;
   checks: Check[];
@@ -260,8 +261,10 @@ export function evaluateForms(entries: readonly Entry[], profile: Profile, rules
 /** Handbook, "Combining Fieldwork Types": concentrated hours × 1.33 plus supervised hours must reach the supervised total (BCBA). */
 export const MIXED_CONCENTRATED_MULTIPLIER = 1.33;
 
-export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet, typeOf?: FormType): ProgramResult {
-  const months = evaluateForms(entries, profile, rules, typeOf);
+export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet, typeOf?: FormType, lost?: (month: string, supervisorId: string | undefined) => boolean): ProgramResult {
+  // A form signed late (or never) loses the whole month.
+  const months = evaluateForms(entries, profile, rules, typeOf).map(m => (lost?.(m.month, m.supervisorId)
+    ? { ...m, lost: true, countable: { independentMinutes: 0, supervisedMinutes: 0 }, countableMinutes: 0 } : m));
   const passing = months.filter(m => m.countableMinutes > 0);
   const byType = { supervised: 0, concentrated: 0 };
   for (const m of passing) byType[m.type!] += m.countableMinutes;
@@ -366,3 +369,18 @@ export const FINAL_ATTESTATIONS: Readonly<Record<Edition, { id: string; statemen
 };
 
 export * from './importer.js';
+
+export interface FormSignatures { traineeSignedAt?: string | Date | null; supervisorSignedAt?: string | Date | null; externalSignedOn?: string | null }
+const day = (d: string | Date) => (typeof d === 'string' ? d : d.toISOString()).slice(0, 10);
+
+/**
+ * Handbook: an M-FVF "not signed by the last day of the calendar month following the month of supervision" means
+ * "No hours are eligible for the month." Lost once the deadline has passed without both signatures by then
+ * (in Fieldtrack, or recorded as signed outside it).
+ */
+export function formLost(month: string, today: string, s: FormSignatures = {}): boolean {
+  const due = signDeadline(month);
+  if (today <= due) return false;
+  if (s.externalSignedOn) return s.externalSignedOn > due;
+  return !(s.traineeSignedAt && s.supervisorSignedAt && day(s.traineeSignedAt) <= due && day(s.supervisorSignedAt) <= due);
+}

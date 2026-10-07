@@ -52,6 +52,7 @@ export function ImportHours({ me, supervisors }: { me: Me; supervisors: Supervis
         </>
       )}
       {done !== null && <p className="ok">✓ {done} entr{done === 1 ? 'y' : 'ies'} saved. They upload in the background; check the sync badge.</p>}
+      {done !== null && <p className="muted small">Already signed those months' forms elsewhere? Open each month and choose "Signed outside Fieldtrack" so the BACB signing deadline doesn't drop it.</p>}
     </section>
   );
 }

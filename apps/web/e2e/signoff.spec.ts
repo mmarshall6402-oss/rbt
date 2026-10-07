@@ -206,3 +206,19 @@ test('imports hours from a CSV, skips bad rows, and never duplicates on re-impor
   }
   expect(await call(trainee, '/entries?month=2026-09')).toHaveLength(2);
 });
+
+test('a past month nobody signed in time counts nothing until it is recorded as signed elsewhere', async ({ page }) => {
+  const { trainee } = await seedPair();
+  const [s] = await call(trainee, '/supervisors');
+  const put = (o: object) => call(trainee, `/entries/${crypto.randomUUID()}`, 'PUT', { supervisorId: s.id, kind: 'independent', ...o });
+  await put({ workDate: '2026-08-01', startTime: '00:00', endTime: '18:00' });
+  for (const d of [2, 3]) await put({ workDate: `2026-08-0${d}`, startTime: '09:00', endTime: '11:00', kind: 'supervised', contact: 'observation' });
+  await signInAs(page, trainee, '/app?month=2026-08'); // due 2026-09-30, long past
+  await expect(page.getByText(/wasn't signed by 2026-09-30/)).toBeVisible();
+  await expect(page.locator('.ring', { hasText: 'Countable total' }).locator('.ring-value')).toHaveText('0');
+  await page.getByRole('button', { name: 'Signed outside Fieldtrack…' }).click();
+  await page.getByLabel('Date both of you had signed').fill('2026-09-20');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText(/✓ Signed outside Fieldtrack 2026-09-20/)).toBeVisible();
+  await expect(page.locator('.ring', { hasText: 'Countable total' }).locator('.ring-value')).toHaveText('22');
+});

@@ -12,7 +12,8 @@ import { sendReminders } from './reminders.js';
 // Requires a throwaway database: TEST_DATABASE_URL=postgres://... (the schema is dropped and recreated)
 const url = process.env.TEST_DATABASE_URL;
 const db = createDb(url ?? 'postgres://invalid');
-const app = buildApp({ db, verify: devVerify(), logger: false });
+const NOW = new Date('2026-10-15T12:00:00Z'); // fixed clock: deadline rules depend on today
+const app = buildApp({ db, verify: devVerify(), logger: false, clock: () => NOW });
 
 const ids = { trainee: '', other: '', sup: '', sup2: '' };
 const as = (sub: string) => {
@@ -276,6 +277,29 @@ describe.skipIf(!url)('API', () => {
     expect((await trainee.get('/months/2026-09')).json().summary).toMatchObject({ supervisedMinutes: 0, observations: 1, contacts: 0 });
     expect((await trainee.log({ kind: 'supervised', observedAsync: true })).statusCode).toBe(400);
     expect((await trainee.get('/entries?month=2026-09')).json()[0].observedAsync).toBe(true);
+  });
+
+  describe('signing deadline', () => {
+    it('a form unsigned past its deadline counts nothing, unless it was signed outside Fieldtrack in time', async () => {
+      await logPassingMonth('2026-08'); // due 2026-09-30; today is 2026-10-15
+      let p = (await trainee.get('/progress')).json();
+      expect([p.countableMinutes, p.months[0].lost]).toEqual([0, true]);
+
+      expect((await trainee.put('/external-signatures', { supervisorId: ids.sup, month: '2026-08', signedOn: '2026-08-15' })).statusCode).toBe(400); // before the month ended
+      const rec = (await trainee.put('/external-signatures', { supervisorId: ids.sup, month: '2026-08', signedOn: '2026-09-20' })).json();
+      p = (await trainee.get('/progress')).json();
+      expect([p.countableMinutes, p.months[0].lost]).toEqual([21 * 60, undefined]);
+      expect((await sup.get(`/external-signatures?traineeId=${ids.trainee}`)).json()).toHaveLength(1); // the supervisor can see it
+
+      expect((await other.put('/external-signatures', { supervisorId: ids.sup, month: '2026-08', signedOn: '2026-09-20' })).statusCode).toBe(404); // not their supervisor
+      expect((await other.del(`/external-signatures/${rec.id}`)).statusCode).toBe(404);
+      expect((await trainee.del(`/external-signatures/${rec.id}`)).statusCode).toBe(204);
+      expect((await trainee.get('/progress')).json().countableMinutes).toBe(0);
+    });
+    it('signing in Fieldtrack on time keeps the month', async () => {
+      await logPassingMonth('2026-09'); // due 2026-10-31
+      expect((await trainee.get('/progress')).json().countableMinutes).toBe(21 * 60);
+    });
   });
 
   describe('signup', () => {

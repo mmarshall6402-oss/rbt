@@ -106,6 +106,14 @@ export interface DB {
     currentPeriodEnd: Date | null;
     updatedAt: Generated<Date>;
   };
+  externalSignatures: {
+    id: Generated<string>;
+    traineeId: string;
+    supervisorId: string;
+    month: string;
+    signedOn: string;
+    createdAt: Generated<Date>;
+  };
   remindersSent: {
     userId: string;
     kind: string;
