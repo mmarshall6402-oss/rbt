@@ -1,6 +1,6 @@
 import { CamelCasePlugin, Kysely, PostgresDialect, type Generated, type Selectable } from 'kysely';
 import pg from 'pg';
-import type { ContactType, EntryKind, FieldworkType } from '@fieldtrack/rules';
+import type { ContactType, Credential, Edition, EntryKind, FieldworkType } from '@fieldtrack/rules';
 
 // Keep dates/times as strings so they match the rules package exactly (no timezone shifts).
 pg.types.setTypeParser(1082, v => v); // date -> 'YYYY-MM-DD'
@@ -18,6 +18,12 @@ export interface DB {
     role: Role;
     bacbId: string | null;
     fieldworkType: FieldworkType | null;
+    credential: Credential | null;
+    rulesEdition: Edition | null;
+    fieldworkState: string | null;
+    fieldworkCountry: string | null;
+    emailReminders: Generated<boolean>;
+    inviteCode: string | null;
     createdAt: Generated<Date>;
   };
   supervisions: {
@@ -43,6 +49,7 @@ export interface DB {
     contact: ContactType | null;
     format: SupervisionFormat | null;
     description: string;
+    observedAsync: Generated<boolean>;
     createdAt: Generated<Date>;
     updatedAt: Generated<Date>;
     deletedAt: Date | null;
@@ -57,8 +64,60 @@ export interface DB {
     summary: unknown;
     traineeSignedAt: Date | null;
     supervisorSignedAt: Date | null;
+    traineeSignature: string | null;
+    supervisorSignature: string | null;
+    attestation: string | null;
     pdfS3Key: string | null;
     createdAt: Generated<Date>;
+  };
+  finalVerifications: {
+    id: Generated<string>;
+    traineeId: string;
+    supervisorId: string;
+    summary: unknown;
+    attestation: string;
+    supervisorSignature: string;
+    supervisorSignedAt: Generated<Date>;
+    createdAt: Generated<Date>;
+  };
+  entryComments: {
+    id: Generated<string>;
+    entryId: string;
+    authorId: string;
+    body: string;
+    createdAt: Generated<Date>;
+    resolvedAt: Date | null;
+  };
+  supervisorInvites: {
+    id: Generated<string>;
+    tokenHash: string;
+    traineeId: string;
+    startsOn: string;
+    createdAt: Generated<Date>;
+    expiresAt: Generated<Date>;
+    acceptedBy: string | null;
+    acceptedAt: Date | null;
+  };
+  subscriptions: {
+    id: Generated<string>;
+    userId: string;
+    stripeCustomerId: string;
+    status: Generated<string>;
+    currentPeriodEnd: Date | null;
+    updatedAt: Generated<Date>;
+  };
+  externalSignatures: {
+    id: Generated<string>;
+    traineeId: string;
+    supervisorId: string;
+    month: string;
+    signedOn: string;
+    createdAt: Generated<Date>;
+  };
+  remindersSent: {
+    userId: string;
+    kind: string;
+    sentAt: Generated<Date>;
   };
   auditLog: {
     id: Generated<string>;
@@ -74,5 +133,5 @@ export interface DB {
 
 export type User = Selectable<DB['users']>;
 
-export const createDb = (connectionString: string) =>
-  new Kysely<DB>({ dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString, max: 10 }) }), plugins: [new CamelCasePlugin()] });
+export const createDb = (conn: string | pg.PoolConfig) =>
+  new Kysely<DB>({ dialect: new PostgresDialect({ pool: new pg.Pool({ ...(typeof conn === 'string' ? { connectionString: conn } : conn), max: 10 }) }), plugins: [new CamelCasePlugin()] });

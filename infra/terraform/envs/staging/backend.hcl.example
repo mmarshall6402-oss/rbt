@@ -1,0 +1,5 @@
+bucket       = "YOUR-TERRAFORM-STATE-BUCKET"
+key          = "fieldtrack/staging.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true # S3-native state locking
