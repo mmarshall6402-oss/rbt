@@ -233,6 +233,8 @@ test('a double-tap saves one entry, and out-of-range dates are caught before sav
   await expect(page.getByRole('button', { name: 'Save entry' })).toBeDisabled();
   await page.getByLabel('Date', { exact: true }).fill('2026-09-15');
   await page.getByRole('button', { name: 'Save entry' }).dblclick();
+  // The badge may read "Synced" before the upload starts, so wait for the entry itself, then make sure it's the only one.
+  await expect.poll(async () => (await call(trainee, '/entries?month=2026-09')).length, { timeout: 15_000 }).toBeGreaterThan(0);
   await expect(page.locator('.sync')).toHaveText('✓ Synced');
   expect(await call(trainee, '/entries?month=2026-09')).toHaveLength(1);
 });
