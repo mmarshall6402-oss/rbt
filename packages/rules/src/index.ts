@@ -275,3 +275,18 @@ export const signDeadline = (month: string) => {
   const [y, m] = month.split('-').map(Number) as [number, number];
   return new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
 };
+
+/**
+ * Projected finish from the countable hours of the last `window` full months before `current` (YYYY-MM).
+ * null when there's no recent pace to project from.
+ */
+export function forecast(program: ProgramResult, current: string, window = 3): { minutesPerMonth: number; finishMonth: string } | null {
+  const [y, m] = current.split('-').map(Number) as [number, number];
+  const monthAt = (offset: number) => new Date(Date.UTC(y, m - 1 + offset, 1)).toISOString().slice(0, 7);
+  const recent = new Set(Array.from({ length: window }, (_, i) => monthAt(-1 - i)));
+  const minutes = program.months.filter(r => r.passed && recent.has(r.month)).reduce((n, r) => n + r.countableMinutes, 0);
+  const left = program.requiredMinutes - program.countableMinutes;
+  if (left <= 0) return { minutesPerMonth: Math.round(minutes / window), finishMonth: current };
+  if (!minutes) return null;
+  return { minutesPerMonth: Math.round(minutes / window), finishMonth: monthAt(Math.ceil((left * window) / minutes) - 1) };
+}

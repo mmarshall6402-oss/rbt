@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, formatHours, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type Profile, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, forecast, formatHours, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
@@ -208,5 +208,19 @@ describe('signDeadline', () => {
     expect(signDeadline('2026-09')).toBe('2026-10-31');
     expect(signDeadline('2026-12')).toBe('2027-01-31');
     expect(signDeadline('2028-01')).toBe('2028-02-29');
+  });
+});
+
+describe('forecast', () => {
+  const month = (m: string, h: number, passed = true) => ({ month: m, passed, countableMinutes: passed ? h * 60 : 0 }) as MonthResult;
+  const prog = (months: MonthResult[], doneHours: number) => ({ months, countableMinutes: doneHours * 60, requiredMinutes: 1500 * 60 }) as ProgramResult;
+  it('projects from the last three full months, ignoring the current one and failed months', () => {
+    const p = prog([month('2026-07', 100), month('2026-08', 100, false), month('2026-09', 200), month('2026-10', 999)], 1200);
+    // 300 h over 3 months = 100 h/month; 300 h left -> 3 months: Oct, Nov, Dec
+    expect(forecast(p, '2026-10')).toEqual({ minutesPerMonth: 6000, finishMonth: '2026-12' });
+  });
+  it('is null with no recent pace, and the current month once complete', () => {
+    expect(forecast(prog([month('2025-01', 100)], 100), '2026-10')).toBeNull();
+    expect(forecast(prog([], 1500), '2026-10')?.finishMonth).toBe('2026-10');
   });
 });

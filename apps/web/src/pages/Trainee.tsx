@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { durationMinutes, evaluateForms, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile } from '@fieldtrack/rules';
+import { durationMinutes, evaluateForms, forecast, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, Deadline, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
@@ -53,6 +53,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         )}
         {result.data && <MonthRings m={result.data} profile={profile} />}
       </section>
+      {progress.data && <Pace program={progress.data} />}
 
       <div className="cols">
         <section className="card">
@@ -336,4 +337,12 @@ function StandardSettings({ me }: { me: Me }) {
       <ErrorText error={save.error} />
     </section>
   );
+}
+
+/** "When will I finish?" from the last three months' countable hours. */
+function Pace({ program }: { program: ProgramResult }) {
+  if (program.complete) return <p className="notice">🎉 You've met the fieldwork hours. Keep your signed forms for 7 years.</p>;
+  const f = forecast(program, currentMonth());
+  if (!f) return <p className="muted small center-text">Your projected finish date appears after your first fully countable month.</p>;
+  return <p className="muted small center-text">At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</p>;
 }
