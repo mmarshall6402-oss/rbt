@@ -44,13 +44,20 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   await page.getByLabel('When will you apply for certification?').selectOption('2027');
   await expect(page.locator('.ring', { hasText: 'Supervision (7.5%)' })).toHaveCount(1);
 
-  await page.getByRole('button', { name: /Sign Sep/ }).click();
+  await page.getByRole('button', { name: /^Sign Sep/ }).click();
+  const sign = page.getByRole('button', { name: /for Lorinda Otto/ });
+  await page.getByLabel('Type your full name to sign electronically').fill('Pat Traine');
+  await expect(sign).toBeDisabled(); // must match your name
+  await page.getByLabel('Type your full name to sign electronically').fill('pat trainee');
+  await sign.click();
   await expect(page.getByText('waiting on supervisor')).toBeVisible();
 
   await supPage.goto('/supervise?month=2026-09');
   await expect(supPage.getByText('Ready for your signature')).toBeVisible();
   await supPage.getByRole('link', { name: 'Review' }).click();
-  supPage.on('dialog', d => d.accept());
+  await supPage.getByRole('button', { name: /^Sign September/ }).click();
+  await expect(supPage.getByText('The trainee completed the fieldwork in compliance')).toBeVisible(); // 2027 attestation
+  await supPage.getByLabel('Type your full name to sign electronically').fill('Lorinda Otto');
   await supPage.getByRole('button', { name: 'Sign & lock month' }).click();
   await expect(supPage.getByText('✓ Signed', { exact: true })).toBeVisible();
 

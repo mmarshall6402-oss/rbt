@@ -279,7 +279,7 @@ describe.skipIf(!url)('API', () => {
     });
     it('signed months keep the rules they were signed under', async () => {
       await trainee.log();
-      const signed = (await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup })).json();
+      const signed = (await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true })).json();
       expect(signed.traineeSignedAt).toBeTruthy();
       await trainee.patch('/me', { rulesEdition: '2027' });
       const v = await db.selectFrom('monthVerifications').select('rulesVersion').executeTakeFirstOrThrow();
@@ -307,13 +307,13 @@ describe.skipIf(!url)('API', () => {
   });
 
   describe('monthly sign-off', () => {
-    const sign = () => trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup });
+    const sign = () => trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
     it('requires the trainee to sign first, then locks on supervisor signature', async () => {
       const id = randomUUID();
       await trainee.log({}, id);
-      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee })).statusCode).toBe(409);
+      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).statusCode).toBe(409);
       expect((await sign()).json().traineeSignedAt).toBeTruthy();
-      const res = await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee });
+      const res = await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true });
       expect(res.statusCode).toBe(200);
       expect(res.json().supervisorSignedAt).toBeTruthy();
       expect((await trainee.log({ description: 'x' }, id)).statusCode).toBe(409);
@@ -325,13 +325,22 @@ describe.skipIf(!url)('API', () => {
       await trainee.log({}, id);
       await sign();
       await trainee.log({ endTime: '09:00' }, id);
-      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee })).json().error).toMatch(/re-sign/);
+      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).json().error).toMatch(/re-sign/);
       await sign();
-      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee })).statusCode).toBe(200);
+      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).statusCode).toBe(200);
+    });
+    it('is an electronic signature: requires the attestation and the signer’s own typed name', async () => {
+      await trainee.log();
+      expect((await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee' })).json().error).toMatch(/attestation/);
+      expect((await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Sup', attest: true })).json().error).toMatch(/full name/);
+      expect((await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: '  trainee ', attest: true })).statusCode).toBe(200);
+      const [v] = (await trainee.get('/verifications?month=2026-09')).json();
+      expect(v.attestation).toBe('bacb-mfvf-2022-v2023-08');
+      expect((await db.selectFrom('monthVerifications').select('traineeSignature').executeTakeFirstOrThrow()).traineeSignature).toBe('trainee');
     });
     it('rejects unlinked people', async () => {
-      expect((await other.post('/verifications/2026-09/sign', { supervisorId: ids.sup })).statusCode).toBe(404);
-      expect((await sup2.post('/verifications/2026-09/sign', { traineeId: ids.other })).statusCode).toBe(404);
+      expect((await other.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Other', attest: true })).statusCode).toBe(404);
+      expect((await sup2.post('/verifications/2026-09/sign', { traineeId: ids.other, signature: 'Sup2', attest: true })).statusCode).toBe(404);
     });
   });
 
@@ -353,14 +362,14 @@ describe.skipIf(!url)('API', () => {
       expect(['TRAINEE_NAME', 'TRAINEE_CERTIFICATE_MONTH/YEAR', 'TRAINEE_FIELDWORK_STATE', 'RESPONSIBLE_SUPERVISOR_NAME', 'INDEPENDENT_HOURS', 'SUPERVISED_HOURS', 'TOTAL_FIELDWORK', 'PERCENT_HOURS_SUPERVISED', 'TRAINEE_SIGNATURE_DATE'].map(get))
         .toEqual(['Trainee', '09/2026', 'Ohio', 'Sup', '2.33', '1.00', '3.33', String(1 / 3.33), '']); // percent stored as the form's own fraction
 
-      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup });
+      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
       expect((await form(await sup.get(`${url}?traineeId=${ids.trainee}`)))('TRAINEE_SIGNATURE_DATE')).toMatch(/^\d\d\/\d\d\/2026$/);
       await trainee.log({ endTime: '10:00' }, id);
       get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
       expect([get('TRAINEE_SIGNATURE_DATE'), get('INDEPENDENT_HOURS')]).toEqual(['', '2.00']); // stale signature dropped
 
-      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup });
-      await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee });
+      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
+      await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true });
       expect((await form(await trainee.get(`${url}?supervisorId=${ids.sup}`)))('TRAINEE_NAME')).toBeNull();
     });
 

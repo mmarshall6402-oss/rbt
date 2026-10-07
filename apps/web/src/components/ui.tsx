@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { formatHours, targetsFor, type MonthResult, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, formatHours, signatureMatches, targetsFor, type Edition, type MonthResult, type Profile } from '@fieldtrack/rules';
 import { signOut } from '../auth';
 import { wipeDevice } from '../query';
 import { dismissRejected, flush, pendingOps, useSyncState } from '../sync';
@@ -188,3 +188,21 @@ export function AppShell({ name, children, nav }: { name: string; nav?: ReactNod
 }
 
 export const ErrorText = ({ error }: { error: unknown }) => (error ? <p className="error" role="alert">{(error as Error).message}</p> : null);
+
+/** Electronic signature: the form's attestation, then the signer types their own name to show intent to sign. */
+export function SignForm({ edition, name, cta, busy, onSign, onCancel }: { edition: Edition; name: string; cta: string; busy: boolean; onSign: (signature: string) => void; onCancel: () => void }) {
+  const [typed, setTyped] = useState('');
+  return (
+    <form className="stack sign-form" onSubmit={e => { e.preventDefault(); onSign(typed) }}>
+      <strong className="small">By signing, we attest that:</strong>
+      <ul className="small attest">{ATTESTATIONS[edition].statements.map(s => <li key={s}>{s}</li>)}</ul>
+      <label>Type your full name to sign electronically
+        <input value={typed} onChange={e => setTyped(e.target.value)} placeholder={name} autoComplete="off" autoFocus />
+      </label>
+      <div className="row">
+        <button className="primary" disabled={busy || !signatureMatches(typed, name)}>{cta}</button>
+        <button type="button" className="ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}

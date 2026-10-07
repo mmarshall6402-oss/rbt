@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, download, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
-import { AppShell, Checklist, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
+import { AppShell, Checklist, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
 import { EntriesTable } from './Trainee';
 
 const signStatus = (v?: Verification) =>
@@ -77,9 +77,9 @@ export function TraineeReview({ me }: { me: Me }) {
   const [month, setMonth] = useMonthParam();
   const trainee = useTrainees().data?.find(t => t.id === traineeId);
   const result = useMonth(month, traineeId), entries = useEntries(month, traineeId), sig = useVerifications(month, traineeId);
-  const qc = useQueryClient();
+  const qc = useQueryClient(), [signing, setSigning] = useState(false);
   const sign = useMutation({
-    mutationFn: () => api(`/verifications/${month}/sign`, 'POST', { traineeId }),
+    mutationFn: (signature: string) => api(`/verifications/${month}/sign`, 'POST', { traineeId, signature, attest: true }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['verifications'] }),
   });
   const v = sig.data?.[0];
@@ -101,7 +101,10 @@ export function TraineeReview({ me }: { me: Me }) {
           {v?.traineeSignedAt && !v.supervisorSignedAt && (
             <>
               {result.data && !result.data.passed && <p className="notice">⚠ This month doesn't meet every requirement. Signed months still won't count toward the total.</p>}
-              <button className="primary" disabled={sign.isPending} onClick={() => confirm(`Sign ${monthLabel(month)} for ${trainee?.fullName}? This locks the month.`) && sign.mutate()}>Sign & lock month</button>
+              {signing
+                ? <SignForm edition={trainee && profileOf(trainee)?.edition || '2027'} name={me.fullName} cta="Sign & lock month" busy={sign.isPending} onSign={sign.mutate} onCancel={() => setSigning(false)} />
+                : <button className="primary" onClick={() => setSigning(true)}>Sign {monthLabel(month)}…</button>}
+              <p className="muted small">Signing locks the month: the trainee can't change these entries afterward.</p>
             </>
           )}
           {v?.supervisorSignedAt && <p className="muted small">Signed {new Date(v.supervisorSignedAt).toLocaleString()} · rules {v.rulesVersion}</p>}

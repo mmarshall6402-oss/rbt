@@ -62,6 +62,9 @@ export interface DB {
     summary: unknown;
     traineeSignedAt: Date | null;
     supervisorSignedAt: Date | null;
+    traineeSignature: string | null;
+    supervisorSignature: string | null;
+    attestation: string | null;
     pdfS3Key: string | null;
     createdAt: Generated<Date>;
   };

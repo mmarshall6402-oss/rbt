@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillMonthlyForm } from './forms.js';
@@ -43,6 +43,7 @@ const SignupBody = z.discriminatedUnion('role', [
   }),
   z.object({ role: z.literal('supervisor'), fullName: Name, bacbId: z.string().trim().min(1, 'BACB certification number is required').max(50) }),
 ]);
+const editionOf = (rulesVersion: string) => (RULESETS['2027'].version === rulesVersion ? '2027' : '2022');
 const TraineeQuery = z.object({ traineeId: z.uuid().optional() });
 const Id = z.object({ id: z.uuid() });
 
@@ -311,13 +312,18 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     api.get('/verifications', req => asUser(req, async (trx, user) => {
       const { month, traineeId } = z.object({ month: Month }).extend(TraineeQuery.shape).parse(req.query);
       const s = await scope(trx, user, traineeId);
-      return trx.selectFrom('monthVerifications').select(['id', 'traineeId', 'supervisorId', 'month', 'rulesVersion', 'traineeSignedAt', 'supervisorSignedAt'])
+      return trx.selectFrom('monthVerifications').select(['id', 'traineeId', 'supervisorId', 'month', 'rulesVersion', 'attestation', 'traineeSignedAt', 'supervisorSignedAt'])
         .where('traineeId', '=', s.traineeId).where('month', '=', `${month}-01`).$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).execute();
     }));
 
     api.post('/verifications/:month/sign', req => asUser(req, async (trx, user) => {
       const { month } = z.object({ month: Month }).parse(req.params);
-      const body = z.object({ supervisorId: z.uuid().optional(), traineeId: z.uuid().optional() }).parse(req.body ?? {});
+      const body = z.object({
+        supervisorId: z.uuid().optional(), traineeId: z.uuid().optional(), signature: z.string().max(200),
+        attest: z.literal(true, 'You must agree to the attestation to sign'),
+      }).parse(req.body ?? {});
+      // Electronic signature: typing your own name after reading the attestation shows intent to sign.
+      if (!signatureMatches(body.signature, user.fullName)) throw new HttpError(400, `Type your full name exactly as on your account (${user.fullName}) to sign`);
       const traineeId = user.role === 'trainee' ? user.id : body.traineeId;
       const supervisorId = user.role === 'supervisor' ? user.id : body.supervisorId;
       if (!traineeId || !supervisorId || user.role === 'admin') throw new HttpError(400, user.role === 'trainee' ? 'supervisorId is required' : 'traineeId is required');
@@ -329,13 +335,13 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
 
       if (user.role === 'trainee') {
         return trx.insertInto('monthVerifications')
-          .values({ traineeId, supervisorId, month: `${month}-01`, fieldworkType: (await traineeProfile(trx, traineeId)).type, rulesVersion: result.rulesVersion, summary: JSON.stringify(result), traineeSignedAt: new Date(), supervisorSignedAt: null, pdfS3Key: null })
-          .onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doUpdateSet(eb => ({ summary: eb.ref('excluded.summary'), rulesVersion: eb.ref('excluded.rulesVersion'), traineeSignedAt: eb.ref('excluded.traineeSignedAt') })))
+          .values({ traineeId, supervisorId, month: `${month}-01`, fieldworkType: (await traineeProfile(trx, traineeId)).type, rulesVersion: result.rulesVersion, summary: JSON.stringify(result), traineeSignedAt: new Date(), supervisorSignedAt: null, traineeSignature: body.signature.trim(), supervisorSignature: null, attestation: ATTESTATIONS[editionOf(result.rulesVersion)].id, pdfS3Key: null })
+          .onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doUpdateSet(eb => ({ summary: eb.ref('excluded.summary'), rulesVersion: eb.ref('excluded.rulesVersion'), traineeSignedAt: eb.ref('excluded.traineeSignedAt'), traineeSignature: eb.ref('excluded.traineeSignature'), attestation: eb.ref('excluded.attestation') })))
           .returning(['id', 'month', 'traineeSignedAt', 'supervisorSignedAt']).executeTakeFirstOrThrow();
       }
       if (!existing?.traineeSignedAt) throw new HttpError(409, 'The trainee has not signed this month yet');
       if (canonical(existing.summary) !== canonical(result)) throw new HttpError(409, 'Entries changed since the trainee signed. Ask them to re-sign.');
-      return trx.updateTable('monthVerifications').set({ supervisorSignedAt: new Date() }).where('id', '=', existing.id)
+      return trx.updateTable('monthVerifications').set({ supervisorSignedAt: new Date(), supervisorSignature: body.signature.trim() }).where('id', '=', existing.id)
         .returning(['id', 'month', 'traineeSignedAt', 'supervisorSignedAt']).executeTakeFirstOrThrow();
     }));
 
@@ -355,11 +361,11 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
         const traineeSignatureValid = !!v?.traineeSignedAt && (!!v.supervisorSignedAt || canonical(v.summary) === canonical(live));
         const result = v?.supervisorSignedAt ? v.summary as typeof live : live;
         return fillMonthlyForm({
-          edition: result.rulesVersion.endsWith('2027') ? '2027' : '2022', fieldworkType: v?.fieldworkType ?? t.fieldworkType!, month,
+          edition: editionOf(result.rulesVersion), fieldworkType: v?.fieldworkType ?? t.fieldworkType!, month,
           trainee: { name: t.fullName, bacbId: t.bacbId }, supervisor: { name: s.fullName, bacbId: s.bacbId },
           state: t.fieldworkState, country: t.fieldworkCountry, summary: result.summary,
-          traineeSigned: traineeSignatureValid ? { name: t.fullName, at: v!.traineeSignedAt! } : null,
-          supervisorSigned: v?.supervisorSignedAt ? { name: s.fullName, at: v.supervisorSignedAt } : null,
+          traineeSigned: traineeSignatureValid ? { name: v!.traineeSignature ?? t.fullName, at: v!.traineeSignedAt! } : null,
+          supervisorSigned: v?.supervisorSignedAt ? { name: v.supervisorSignature ?? s.fullName, at: v.supervisorSignedAt } : null,
           reference: v?.id ?? 'unsigned draft',
         });
       });

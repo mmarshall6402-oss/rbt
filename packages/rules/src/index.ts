@@ -246,3 +246,26 @@ export function findOverlaps<T extends Entry>(entries: readonly T[]): [T, T][] {
 }
 
 export const formatHours = (minutes: number, decimals = 3): string => (minutes / 60).toFixed(decimals);
+
+/** The attestation each Monthly Fieldwork Verification Form asks both signers to agree to (verbatim from the BACB forms). */
+export const ATTESTATIONS: Readonly<Record<Edition, { id: string; statements: readonly string[] }>> = {
+  '2022': { id: 'bacb-mfvf-2022-v2023-08', statements: [
+    'The information contained on this form is true and correct to the best of our knowledge;',
+    'The required number of supervisory contacts occurred during this month;',
+    'Observation of the trainee with a client occurred during this supervisory period with a frequency appropriate for this fieldwork type;',
+    'The trainee was supervised for the required amount of time for this supervisory period;',
+    'We have read and understand the most recent version of the Fieldwork Requirements (BCBA/BCaBA)',
+    'We are only including appropriate behavior-analytic activities in our totals listed above; and',
+    'The fieldwork hours obtained during this supervisory period are otherwise compliant with the Fieldwork Requirements (BCBA/BCaBA)',
+  ] },
+  '2027': { id: 'bacb-mfvf-2027-v2026-06', statements: [
+    'The information contained in this form is true and correct to the best of our knowledge.',
+    'The trainee completed the fieldwork in compliance with all relevant fieldwork requirements, including adherence to the BACB’s ethics requirements.',
+  ] },
+};
+
+/** Whether a typed signature matches the signer's name (case and spacing don't matter). */
+export const signatureMatches = (typed: string, name: string) => {
+  const norm = (s: string) => s.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+  return norm(typed) !== '' && norm(typed) === norm(name);
+};

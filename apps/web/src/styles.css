@@ -149,3 +149,5 @@ tr.desc td { white-space: normal; color: var(--muted); font-size: 13px; padding-
 .history { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .history li { line-height: 1.4; }
 .delta { font-variant-numeric: tabular-nums; }
+.sign-form { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 8px; width: 100%; }
+.attest { margin: 0; padding-left: 18px; color: var(--muted); }
