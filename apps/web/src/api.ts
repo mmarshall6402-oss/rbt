@@ -80,5 +80,7 @@ export const useFinals = (traineeId?: string) => useQuery({ queryKey: ['final', 
 export interface Comment { id: string; entryId: string; body: string; createdAt: string; resolvedAt: string | null; authorId: string; authorName: string | null }
 export const useComments = (month: string, traineeId?: string) =>
   useQuery({ queryKey: ['comments', month, traineeId], queryFn: () => api<Comment[]>(`/comments?month=${month}${q(traineeId)}`) });
+export interface BillingStatus { enabled: boolean; status: string; currentPeriodEnd: string | null }
+export const useBilling = () => useQuery({ queryKey: ['billing'], queryFn: () => api<BillingStatus>('/billing') });
 export const useSupervisors = () => useQuery({ queryKey: ['supervisors'], queryFn: () => api<Supervisor[]>('/supervisors') });
 export const useTrainees = () => useQuery({ queryKey: ['trainees'], queryFn: () => api<Trainee[]>('/trainees') });

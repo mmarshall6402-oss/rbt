@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
-import { api, download, profileOf, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { api, download, profileOf, useBilling, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
@@ -86,6 +87,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
       <div className="cols">
         <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} names={names} /></section>
         <StandardSettings me={me} />
+        <BillingCard />
         <section className="card">
           <h2>Supervisors</h2>
           <ul className="people">{supervisors.data?.map(s => (
@@ -420,5 +422,30 @@ function CommentThread({ entryId, comments, composing, onDone }: { entryId: stri
       )}
       <ErrorText error={add.error ?? resolve.error} />
     </div>
+  );
+}
+
+/** Fieldtrack Pro via Stripe Checkout; hidden until billing is configured. Card details stay with Stripe. */
+function BillingCard() {
+  const billing = useBilling(), [params] = useSearchParams();
+  const go = useMutation({
+    mutationFn: (path: '/billing/checkout' | '/billing/portal') => api<{ url: string }>(path, 'POST'),
+    onSuccess: ({ url }) => location.assign(url),
+  });
+  const b = billing.data;
+  if (!b?.enabled) return null;
+  const active = ['active', 'trialing', 'past_due'].includes(b.status);
+  return (
+    <section className="card stack">
+      <h2>Fieldtrack Pro</h2>
+      {params.get('billing') === 'success' && !active && <p className="notice">Payment received. Your plan activates in a moment.</p>}
+      {active
+        ? <p>{b.status === 'past_due' ? '⚠ Payment failed. Update your card to keep Pro.' : '✓ Active'}{b.currentPeriodEnd && <span className="muted small"> · renews {new Date(b.currentPeriodEnd).toLocaleDateString()}</span>}</p>
+        : <p className="muted">Support Fieldtrack and get Pro features.</p>}
+      <button className={active ? 'ghost small' : 'primary'} disabled={go.isPending} onClick={() => go.mutate(active || b.status === 'canceled' ? '/billing/portal' : '/billing/checkout')}>
+        {active ? 'Manage billing' : b.status === 'canceled' ? 'Resubscribe' : 'Upgrade to Pro'}
+      </button>
+      <ErrorText error={go.error} />
+    </section>
   );
 }

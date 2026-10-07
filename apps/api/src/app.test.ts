@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
 import { PDFDocument } from 'pdf-lib';
+import Stripe from 'stripe';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { devVerify } from './auth.js';
@@ -415,6 +416,47 @@ describe.skipIf(!url)('API', () => {
       await trainee.patch('/me', { emailReminders: true });
       expect(await sendReminders(db, async () => { throw new Error('SES down') }, '2026-10-25', 'https://app.test')).toBe(0);
       expect(await run('2026-10-26')).toBe(1);
+    });
+  });
+
+  describe('billing (Stripe)', () => {
+    const real = new Stripe('sk_test_dummy'), secret = 'whsec_test', created: unknown[] = [];
+    const stripe = {
+      webhooks: real.webhooks,
+      checkout: { sessions: { create: async (p: unknown) => { created.push(p); return { url: 'https://checkout.stripe.test/s' } } } },
+      billingPortal: { sessions: { create: async () => ({ url: 'https://billing.stripe.test/p' }) } },
+    } as unknown as Stripe;
+    const billed = buildApp({ db, verify: devVerify(), logger: false, billing: { stripe, webhookSecret: secret, pricePro: 'price_pro', appUrl: 'https://app.test' } });
+    const req = (method: 'GET' | 'POST', url: string, sub = 'trainee') => billed.inject({ method, url: `/api${url}`, headers: { 'x-dev-sub': sub } });
+    const hook = (type: string, object: object, sign = true) => {
+      const payload = JSON.stringify({ id: 'evt_1', object: 'event', type, data: { object } });
+      return billed.inject({ method: 'POST', url: '/api/stripe/webhook', payload, headers: {
+        'content-type': 'application/json', 'stripe-signature': sign ? real.webhooks.generateTestHeaderString({ payload, secret }) : 't=1,v1=bad' } });
+    };
+    const subscription = (status: string) => ({ object: 'subscription', customer: 'cus_1', status, metadata: { userId: ids.trainee }, items: { data: [{ current_period_end: 1_800_000_000 }] } });
+
+    it('is off without Stripe keys', async () => {
+      expect((await trainee.get('/billing')).json()).toMatchObject({ enabled: false, status: 'none' });
+      expect((await trainee.post('/billing/checkout')).statusCode).toBe(404);
+    });
+
+    it('checkout → signed webhooks → active; tampered webhooks are rejected', async () => {
+      expect((await req('POST', '/billing/checkout')).json()).toEqual({ url: 'https://checkout.stripe.test/s' });
+      expect(created[0]).toMatchObject({ mode: 'subscription', client_reference_id: ids.trainee, customer_email: 't@x', line_items: [{ price: 'price_pro', quantity: 1 }] });
+      expect((await req('POST', '/billing/checkout', 'sup')).statusCode).toBe(403);
+
+      expect((await hook('customer.subscription.created', subscription('active'), false)).statusCode).toBe(400);
+      expect((await req('GET', '/billing')).json().status).toBe('none');
+      // Subscription event can beat checkout.session.completed; metadata links the customer either way.
+      expect((await hook('customer.subscription.created', subscription('active'))).statusCode).toBe(200);
+      expect((await hook('checkout.session.completed', { object: 'checkout.session', client_reference_id: ids.trainee, customer: 'cus_1' })).statusCode).toBe(200);
+      expect((await req('GET', '/billing')).json()).toMatchObject({ enabled: true, status: 'active', currentPeriodEnd: new Date(1_800_000_000_000).toISOString() });
+      expect((await req('POST', '/billing/checkout')).statusCode).toBe(409); // already subscribed
+      expect((await req('POST', '/billing/portal')).json()).toEqual({ url: 'https://billing.stripe.test/p' });
+      expect((await req('GET', '/billing', 'other')).json().status).toBe('none'); // nobody else's
+
+      await hook('customer.subscription.deleted', subscription('active'));
+      expect((await req('GET', '/billing')).json().status).toBe('canceled');
     });
   });
 

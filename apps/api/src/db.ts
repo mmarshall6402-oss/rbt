@@ -97,6 +97,14 @@ export interface DB {
     acceptedBy: string | null;
     acceptedAt: Date | null;
   };
+  subscriptions: {
+    id: Generated<string>;
+    userId: string;
+    stripeCustomerId: string;
+    status: Generated<string>;
+    currentPeriodEnd: Date | null;
+    updatedAt: Generated<Date>;
+  };
   remindersSent: {
     userId: string;
     kind: string;

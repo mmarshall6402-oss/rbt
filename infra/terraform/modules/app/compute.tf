@@ -59,7 +59,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = [aws_db_instance.main.master_user_secret[0].secret_arn, aws_secretsmanager_secret.sentry_dsn.arn] },
+      { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = concat([aws_db_instance.main.master_user_secret[0].secret_arn, aws_secretsmanager_secret.sentry_dsn.arn], [for s in aws_secretsmanager_secret.stripe : s.arn]) },
       { Effect = "Allow", Action = "kms:Decrypt", Resource = aws_kms_key.main.arn },
     ]
   })
@@ -111,8 +111,14 @@ locals {
       { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
       { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.web.id },
       { name = "RECORDS_BUCKET", value = aws_s3_bucket.records.bucket },
+      { name = "APP_URL", value = "https://${var.domain}" },
+      { name = "STRIPE_PRICE_PRO", value = var.stripe_price_pro },
     ])
-    secrets = [{ name = "SENTRY_DSN", valueFrom = aws_secretsmanager_secret.sentry_dsn.arn }]
+    secrets = [
+      { name = "SENTRY_DSN", valueFrom = aws_secretsmanager_secret.sentry_dsn.arn },
+      { name = "STRIPE_SECRET_KEY", valueFrom = aws_secretsmanager_secret.stripe["secret-key"].arn },
+      { name = "STRIPE_WEBHOOK_SECRET", valueFrom = aws_secretsmanager_secret.stripe["webhook-secret"].arn },
+    ]
   })
   # Migrations run as the owner (schema changes need it).
   migrate_container = merge(local.base_container, {

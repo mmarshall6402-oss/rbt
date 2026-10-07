@@ -7,6 +7,7 @@ import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
 import { hoursLogPdf } from './hourslog.js';
+import { stripeWebhook, type Billing } from './billing.js';
 import type { DB, User } from './db.js';
 
 export class HttpError extends Error {
@@ -96,7 +97,7 @@ const toCsv = (rows: unknown[][]) => rows.map(r => r.map(csvCell).join(',')).joi
 const publicEntry = ({ traineeId, organizationId, deletedAt, ...e }: EntryRow) => e;
 const publicUser = ({ cognitoSub, ...u }: User) => u;
 
-export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify: Verify; logger?: boolean }) {
+export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB>; verify: Verify; logger?: boolean; billing?: Billing | undefined }) {
   // Never log bodies: descriptions are PHI.
   const app = Fastify({ logger: logger && { redact: ['req.headers.authorization', 'req.headers["x-dev-sub"]'] } });
 
@@ -532,6 +533,37 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       });
       return reply.type('application/pdf').header('cache-control', 'no-store').header('content-disposition', 'attachment; filename="final-fieldwork-verification.pdf"').send(Buffer.from(pdf));
     });
+
+    // ---- Billing (Stripe Checkout + customer portal; off until Stripe is configured) ----
+    api.get('/billing', req => asUser(req, async (trx, user) => {
+      const sub = await trx.selectFrom('subscriptions').select(['status', 'currentPeriodEnd']).where('userId', '=', user.id).executeTakeFirst();
+      return { enabled: !!billing, status: sub?.status ?? 'none', currentPeriodEnd: sub?.currentPeriodEnd ?? null };
+    }));
+
+    const needBilling = () => { if (!billing) throw new HttpError(404, 'Billing is not set up'); return billing };
+
+    api.post('/billing/checkout', req => asUser(req, async (trx, user) => {
+      const b = needBilling();
+      requireRole(user, 'trainee');
+      const sub = await trx.selectFrom('subscriptions').select(['status', 'stripeCustomerId']).where('userId', '=', user.id).executeTakeFirst();
+      if (sub && ['active', 'trialing', 'past_due'].includes(sub.status)) throw new HttpError(409, 'You already have a subscription; manage it from Billing');
+      const session = await b.stripe.checkout.sessions.create({
+        mode: 'subscription', line_items: [{ price: b.pricePro, quantity: 1 }], allow_promotion_codes: true,
+        client_reference_id: user.id, subscription_data: { metadata: { userId: user.id } },
+        ...(sub ? { customer: sub.stripeCustomerId } : { customer_email: user.email }),
+        success_url: `${b.appUrl}/app?billing=success`, cancel_url: `${b.appUrl}/app`,
+      });
+      return { url: session.url };
+    }));
+
+    api.post('/billing/portal', req => asUser(req, async (trx, user) => {
+      const b = needBilling();
+      const sub = await trx.selectFrom('subscriptions').select('stripeCustomerId').where('userId', '=', user.id).executeTakeFirst();
+      if (!sub) throw new HttpError(400, 'No subscription yet');
+      return { url: (await b.stripe.billingPortal.sessions.create({ customer: sub.stripeCustomerId, return_url: `${b.appUrl}/app` })).url };
+    }));
+
+    if (billing) stripeWebhook(api, db, billing);
   }, { prefix: '/api' });
 
   return app;

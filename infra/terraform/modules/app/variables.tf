@@ -83,3 +83,9 @@ variable "mfa_required" {
   type        = bool
   default     = true
 }
+
+variable "stripe_price_pro" {
+  description = "Stripe Price ID for the trainee Pro plan (price_...); empty until pricing is set"
+  type        = string
+  default     = ""
+}

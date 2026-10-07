@@ -163,3 +163,20 @@ resource "aws_secretsmanager_secret_version" "sentry_dsn" {
     ignore_changes = [secret_string]
   }
 }
+
+# Stripe keys: set the values in the console after creating the Stripe account; billing stays off while they're blank.
+resource "aws_secretsmanager_secret" "stripe" {
+  for_each = toset(["secret-key", "webhook-secret"])
+  #checkov:skip=CKV2_AWS_57:Stripe keys are rolled in the Stripe dashboard, not by a rotation Lambda
+  name       = "${local.prefix}/stripe-${each.key}"
+  kms_key_id = aws_kms_key.main.arn
+}
+
+resource "aws_secretsmanager_secret_version" "stripe" {
+  for_each      = aws_secretsmanager_secret.stripe
+  secret_id     = each.value.id
+  secret_string = " "
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}

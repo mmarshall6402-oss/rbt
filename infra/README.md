@@ -41,6 +41,8 @@ Migrations run with a 5-second lock timeout, so a migration that would block liv
 
 **Reminder emails.** A daily EventBridge schedule (14:00 UTC) runs `dist/reminders.js` from the same image: it emails trainees and supervisors a week and two days before each BACB signing deadline, once per window, with no client details. SES starts in the sandbox (verified addresses only): request production access after the domain's DKIM records verify.
 
+**Billing (Stripe).** Off until configured. To turn on: create the Pro product and price in Stripe, set `stripe_price_pro` in the environment's Terraform, put the secret key and webhook signing secret into the `<prefix>/stripe-secret-key` and `<prefix>/stripe-webhook-secret` secrets, and point a Stripe webhook at `https://<domain>/api/stripe/webhook` for `checkout.session.completed` and `customer.subscription.*`. Card data never reaches our servers.
+
 **Database logins.** Migrations run as the RDS owner (password in Secrets Manager, readable only by the task execution role). The API never gets that password: it signs in as `fieldtrack_api` with 15-minute IAM tokens (`rds-db:connect` on the task role). That login has no privileges except switching to the row-level-security role per request (`db/migrations/007_api_login.sql`). Migrations always run before the new API rolls out, so the login exists before anything uses it.
 
 ## Recovering from a bad change (point-in-time restore)
