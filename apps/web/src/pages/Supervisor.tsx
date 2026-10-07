@@ -113,7 +113,7 @@ export function TraineeReview({ me }: { me: Me }) {
         </section>
       </div>
 
-      <section className="card"><h2>Entries</h2><EntriesTable entries={entries.data ?? []} supervisors={[]} /></section>
+      <section className="card"><div className="row spread"><h2>Entries</h2><button className="ghost small" onClick={() => void download(`/entries/export.csv?traineeId=${traineeId}`, `fieldwork-hours ${trainee?.fullName ?? ''}.csv`).catch(e => alert(e.message))}>Export CSV</button></div><EntriesTable entries={entries.data ?? []} supervisors={[]} /></section>
     </AppShell>
   );
 }

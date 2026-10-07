@@ -72,7 +72,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
       </div>
 
       <section className="card">
-        <h2>Entries</h2>
+        <div className="row spread"><h2>Entries</h2><button className="ghost small" onClick={() => void download('/entries/export.csv', 'fieldwork-hours.csv').catch(e => alert(e.message))}>Export all hours (CSV)</button></div>
         <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} onEdit={e => { setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
       </section>
 

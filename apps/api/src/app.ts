@@ -84,6 +84,13 @@ function describeChange(a: AuditRow, month?: string) {
   };
 }
 
+/** CSV cell: quoted, and formula-looking text neutralized so spreadsheets never execute it. */
+const csvCell = (v: unknown) => {
+  const t = v == null ? '' : String(v);
+  return `"${(/^[=+\-@\t\r]/.test(t) ? `'${t}` : t).replace(/"/g, '""')}"`;
+};
+const toCsv = (rows: unknown[][]) => rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+
 const publicEntry = ({ traineeId, organizationId, deletedAt, ...e }: EntryRow) => e;
 const publicUser = ({ cognitoSub, ...u }: User) => u;
 
@@ -237,6 +244,20 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       const { month, traineeId } = z.object({ month: Month }).extend(TraineeQuery.shape).parse(req.query);
       return (await listEntries(trx, await scope(trx, user, traineeId), ...monthRange(month))).map(publicEntry);
     }));
+
+    api.get('/entries/export.csv', async (req, reply) => {
+      const csv = await asUser(req, async (trx, user) => {
+        const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
+        const names = new Map((await trx.selectFrom('users').select(['id', 'fullName']).where('role', '=', 'supervisor').execute()).map(u => [u.id, u.fullName]));
+        const rows = (await listEntries(trx, s)).reverse().map(e => {
+          const min = durationMinutes(e);
+          return [e.workDate, e.startTime.slice(0, 5), e.endTime.slice(0, 5), (min / 60).toFixed(3), e.kind, names.get(e.supervisorId) ?? '',
+            (e.restrictedMinutes / 60).toFixed(3), ((min - e.restrictedMinutes) / 60).toFixed(3), e.isGroup ? 'yes' : 'no', e.contact ?? '', e.format ?? '', e.description];
+        });
+        return toCsv([['Date', 'Start', 'End', 'Hours', 'Type', 'Supervisor', 'Restricted hours', 'Unrestricted hours', 'Group', 'Contact', 'Format', 'Description'], ...rows]);
+      });
+      return reply.type('text/csv; charset=utf-8').header('cache-control', 'no-store').header('content-disposition', 'attachment; filename="fieldwork-hours.csv"').send(csv);
+    });
 
     /**
      * Idempotent create-or-replace keyed by the client's UUID. Offline clients retry freely:

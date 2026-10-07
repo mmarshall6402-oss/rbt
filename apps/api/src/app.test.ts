@@ -344,6 +344,18 @@ describe.skipIf(!url)('API', () => {
     });
   });
 
+  it('exports all hours as CSV, safe to open in a spreadsheet', async () => {
+    await trainee.log({ restrictedMinutes: 30, description: '=HYPERLINK("x")' });
+    await trainee.log({ workDate: '2026-08-01', kind: 'supervised', contact: 'contact', description: 'said "hi"' });
+    const res = await trainee.get('/entries/export.csv');
+    expect(res.headers['content-type']).toBe('text/csv; charset=utf-8');
+    const lines = res.body.trim().split('\r\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toBe('"2026-08-01","08:00","10:00","2.000","supervised","Sup","0.000","2.000","no","contact","","said ""hi"""');
+    expect(lines[2]).toContain(`"1.500","no","","","'=HYPERLINK(""x"")"`);
+    expect((await sup2.get(`/entries/export.csv?traineeId=${ids.other}`)).statusCode).toBe(404);
+  });
+
   describe('BACB monthly verification form (PDF)', () => {
     const form = async (res: Awaited<ReturnType<typeof trainee.get>>) => {
       expect(res.statusCode).toBe(200);
