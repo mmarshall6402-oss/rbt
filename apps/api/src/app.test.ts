@@ -418,6 +418,28 @@ describe.skipIf(!url)('API', () => {
     });
   });
 
+  describe('supervisor invite links', () => {
+    it('trainee invites by link; a supervisor accepts once and is linked from the chosen date', async () => {
+      const { token } = (await other.post('/invites', { startsOn: '2026-08-01' })).json();
+      expect(token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+      expect((await as('brand-new@x').get(`/invites/${token}`)).json()).toEqual({ traineeName: 'Other' }); // no account yet is fine
+      expect((await trainee.post(`/invites/${token}/accept`)).statusCode).toBe(403); // trainees can't accept
+      expect((await sup2.post(`/invites/${token}/accept`)).json()).toEqual({ traineeId: ids.other });
+      expect((await other.get('/supervisors')).json()).toMatchObject([{ fullName: 'Sup2', startsOn: '2026-08-01' }]);
+      expect((await sup.post(`/invites/${token}/accept`)).statusCode).toBe(404); // single use
+      expect((await sup.get(`/invites/${token}`)).statusCode).toBe(404);
+      expect(await db.selectFrom('supervisorInvites').select('tokenHash').execute()).not.toContainEqual({ tokenHash: token }); // only the hash is stored
+    });
+    it('expired or made-up links do nothing', async () => {
+      const { token } = (await other.post('/invites')).json();
+      await db.updateTable('supervisorInvites').set({ expiresAt: new Date('2020-01-01') }).execute();
+      expect((await sup.post(`/invites/${token}/accept`)).statusCode).toBe(404);
+      expect((await sup.post(`/invites/${'x'.repeat(32)}/accept`)).statusCode).toBe(404);
+      expect((await sup.get('/invites/short')).statusCode).toBe(400);
+      expect((await sup.post('/invites')).statusCode).toBe(403); // only trainees invite
+    });
+  });
+
   describe('review comments', () => {
     it('supervisor comments on an entry, trainee sees and resolves it; nobody else can', async () => {
       const id = randomUUID();

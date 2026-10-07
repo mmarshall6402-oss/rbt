@@ -29,7 +29,7 @@ export function Login() {
         ) : <p className="muted">You'll continue to our secure sign-in page.</p>}
         <button className="primary">Continue</button>
         <ErrorText error={error} />
-        <p className="muted small">New here? <Link to="/signup?role=trainee">Create an account</Link></p>
+        <p className="muted small">New here? <Link to={next.startsWith('/invite/') ? `/signup?role=supervisor&invite=${next.slice(8)}` : '/signup?role=trainee'}>Create an account</Link></p>
       </form>
     </main>
   );

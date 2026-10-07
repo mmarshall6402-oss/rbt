@@ -155,3 +155,35 @@ test('supervisor leaves a review comment; trainee sees it and resolves it', asyn
   await expect(page.getByText('End time should be 11:30')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeVisible();
 });
+
+test('no code? the trainee invites their supervisor by link, who signs up and is linked', async ({ browser }) => {
+  const run = Date.now();
+  const page = await (await browser.newContext()).newPage();
+  await page.goto('/signup?role=trainee');
+  await page.getByLabel('Email').fill(`inv-trainee${run}@e2e.test`);
+  await page.getByLabel('Full name').fill('Ivy Invites');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await page.waitForURL('**/app');
+  await page.getByRole('button', { name: 'Invite your supervisor by link' }).click();
+  const url = await page.getByLabel(/Send this link to your supervisor/).inputValue();
+  expect(url).toMatch(/\/invite\/[A-Za-z0-9_-]{32}$/);
+
+  const sup = await (await browser.newContext()).newPage();
+  await sup.goto(url);
+  await sup.waitForURL('**/login?next=*');
+  await sup.getByLabel('Email').fill(`inv-sup${run}@e2e.test`);
+  await sup.getByRole('button', { name: 'Continue' }).click();
+  await expect(sup.getByText('Ivy Invites invited you to supervise')).toBeVisible();
+  await sup.getByRole('link', { name: 'Create your supervisor account' }).click();
+  await expect(sup.getByText("You'll be linked to the trainee who invited you")).toBeVisible();
+  await sup.getByLabel('Email').fill(`inv-sup${run}@e2e.test`); // dev mode only; Cognito supplies it
+  await sup.getByLabel('Full name').fill('Una Supervisor');
+  await sup.getByLabel('BACB certification number').fill('1-22-33333');
+  await sup.getByRole('button', { name: 'Create account' }).click();
+  await sup.waitForURL('**/supervise');
+  await expect(sup.getByText('Ivy Invites')).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Log hours' })).toBeVisible(); // can log right away now
+  await expect(page.getByRole('listitem').filter({ hasText: /^Una Supervisorsince/ })).toBeVisible();
+});

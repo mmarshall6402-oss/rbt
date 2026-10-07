@@ -123,7 +123,26 @@ function LinkSupervisor({ first = false }: { first?: boolean }) {
       </div>
       <button className={first ? 'primary' : ''} disabled={link.isPending}>Add supervisor</button>
       <ErrorText error={link.error} />
+      <InviteByLink startsOn={startsOn} />
     </form>
+  );
+}
+
+/** No code yet? Send the supervisor a one-time link; they're linked when they accept (even if they sign up first). */
+function InviteByLink({ startsOn }: { startsOn: string }) {
+  const [url, setUrl] = useState(''), [copied, setCopied] = useState(false);
+  const create = useMutation({
+    mutationFn: () => api<{ token: string }>('/invites', 'POST', { startsOn }),
+    onSuccess: ({ token }) => setUrl(`${location.origin}/invite/${token}`),
+  });
+  const copy = () => navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) });
+  return url ? (
+    <div className="stack">
+      <label>Send this link to your supervisor (works once, for 30 days)<input readOnly value={url} onFocus={e => e.target.select()} /></label>
+      <button type="button" className="small" onClick={copy}>{copied ? 'Copied ✓' : 'Copy link'}</button>
+    </div>
+  ) : (
+    <p className="muted small">No code? <button type="button" className="ghost small" disabled={create.isPending} onClick={() => create.mutate()}>Invite your supervisor by link</button><ErrorText error={create.error} /></p>
   );
 }
 

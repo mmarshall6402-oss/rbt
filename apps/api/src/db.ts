@@ -87,6 +87,16 @@ export interface DB {
     createdAt: Generated<Date>;
     resolvedAt: Date | null;
   };
+  supervisorInvites: {
+    id: Generated<string>;
+    tokenHash: string;
+    traineeId: string;
+    startsOn: string;
+    createdAt: Generated<Date>;
+    expiresAt: Generated<Date>;
+    acceptedBy: string | null;
+    acceptedAt: Date | null;
+  };
   remindersSent: {
     userId: string;
     kind: string;

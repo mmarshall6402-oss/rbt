@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
@@ -54,6 +54,7 @@ const monthRange = (m: string) => {
   return [`${m}-01`, new Date(Date.UTC(y, mo, 1)).toISOString().slice(0, 10)] as const; // [start, nextMonthStart)
 };
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I/L
+const tokenHash = (t: string) => createHash('sha256').update(t).digest('hex');
 const newInviteCode = () => Array.from(randomBytes(8), b => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
 /** JSON with sorted keys: jsonb reorders keys, so compare snapshots canonically. */
 const canonical = (v: unknown) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
@@ -250,6 +251,37 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       });
       return reply.code(201).send(res);
     });
+
+    // Invite links: the trainee sends one to their supervisor, who is linked on accepting (no code needed).
+    const Token = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{32}$/, 'Invalid invite link') });
+    api.post('/invites', async (req, reply) => {
+      const { startsOn } = z.object({ startsOn: z.iso.date().optional() }).parse(req.body ?? {});
+      const token = randomBytes(24).toString('base64url');
+      await asUser(req, async (trx, user) => {
+        requireRole(user, 'trainee');
+        await trx.insertInto('supervisorInvites').values({ tokenHash: tokenHash(token), traineeId: user.id, startsOn: startsOn ?? today() }).execute();
+      });
+      return reply.code(201).send({ token });
+    });
+
+    // Signed in, but maybe without an account yet (a supervisor about to sign up).
+    api.get('/invites/:token', async req => {
+      const { token } = Token.parse(req.params), id = await identity(req);
+      const row = await db.transaction().execute(async trx => {
+        await becomeUser(trx, id.sub);
+        return (await sql<{ traineeName: string }>`select trainee_name from invite_info(${tokenHash(token)})`.execute(trx)).rows[0];
+      });
+      if (!row) throw new HttpError(404, 'This invite link is invalid, used or expired');
+      return row;
+    });
+
+    api.post('/invites/:token/accept', req => asUser(req, async (trx, user) => {
+      const { token } = Token.parse(req.params);
+      requireRole(user, 'supervisor');
+      const { rows: [r] } = await sql<{ traineeId: string | null }>`select accept_invite(${tokenHash(token)}) as trainee_id`.execute(trx);
+      if (!r?.traineeId) throw new HttpError(404, 'This invite link is invalid, used or expired');
+      return { traineeId: r.traineeId };
+    }));
 
     api.get('/supervisors', req => asUser(req, async (trx, user) => {
       requireRole(user, 'trainee');

@@ -7,7 +7,7 @@ import { ErrorText } from '../components/ui';
 
 export function Signup() {
   const [params, setParams] = useSearchParams();
-  const role = params.get('role') === 'supervisor' ? 'supervisor' : 'trainee';
+  const role = params.get('role') === 'supervisor' ? 'supervisor' : 'trainee', invite = params.get('invite');
   const me = useMe(), nav = useNavigate(), qc = useQueryClient();
   const [f, setF] = useState({ email: '', fullName: '', fieldworkType: 'concentrated', credential: 'bcba', rulesEdition: '2027', bacbId: '' });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
@@ -15,9 +15,11 @@ export function Signup() {
   const signup = useMutation({
     mutationFn: async () => {
       if (authMode === 'dev') await signIn(f.email, '/signup');
-      return api<Me>('/signup', 'POST', role === 'trainee'
+      const user = await api<Me>('/signup', 'POST', role === 'trainee'
         ? { role, fullName: f.fullName, fieldworkType: f.fieldworkType, credential: f.credential, rulesEdition: f.rulesEdition, bacbId: f.bacbId || undefined }
         : { role, fullName: f.fullName, bacbId: f.bacbId });
+      if (invite && role === 'supervisor') await api(`/invites/${invite}/accept`, 'POST').catch(() => {}); // a stale link shouldn't block signup
+      return user;
     },
     onSuccess: user => { qc.setQueryData(['me'], user); nav(homeFor(user.role)) },
   });
@@ -28,11 +30,12 @@ export function Signup() {
   return (
     <main className="auth">
       <Link to="/" className="brand">Fieldtrack</Link>
-      <form className="card stack" onSubmit={(e: FormEvent) => { e.preventDefault(); needsLogin ? void signIn(undefined, `/signup?role=${role}`) : signup.mutate() }}>
+      <form className="card stack" onSubmit={(e: FormEvent) => { e.preventDefault(); needsLogin ? void signIn(undefined, `/signup?${params}`) : signup.mutate() }}>
         <h1>Create your account</h1>
+        {invite && role === 'supervisor' && <p className="notice">You'll be linked to the trainee who invited you as soon as your account is created.</p>}
         <div className="seg" role="radiogroup" aria-label="Account type">
           {(['trainee', 'supervisor'] as const).map(r => (
-            <button type="button" key={r} role="radio" aria-checked={role === r} className={role === r ? 'on' : ''} onClick={() => setParams({ role: r })}>
+            <button type="button" key={r} role="radio" aria-checked={role === r} className={role === r ? 'on' : ''} onClick={() => setParams(invite ? { role: r, invite } : { role: r })}>
               {r === 'trainee' ? 'Trainee' : 'Supervisor (BCBA)'}
             </button>
           ))}
