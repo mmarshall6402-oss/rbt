@@ -225,6 +225,7 @@ export interface ProgramResult {
   countableMinutes: number; // with mixed fieldwork types, concentrated hours are weighted by 1.33
   countableByType: Record<FieldworkType, number>; // actual hours, as reported on the forms
   mixed: false | 'bcba' | 'estimate';
+  windowEnds: string | null; // Handbook: fieldwork must be completed within five continuous years (by calendar month)
   requiredMinutes: number;
   unrestrictedPercent: number; // across passing months
   unrestrictedOk: boolean;
@@ -275,8 +276,9 @@ export function evaluateProgram(entries: readonly Entry[], profile: Profile, rul
   const total = passing.reduce((n, m) => n + m.summary.totalMinutes, 0);
   const unres = passing.reduce((n, m) => n + m.summary.unrestrictedMinutes, 0);
   const unrestrictedOk = unres * 100 >= t.rules.minUnrestrictedPercent * total;
+  const first = passing.map(m => m.month).sort()[0];
   return {
-    months, countableMinutes, requiredMinutes: t.requiredMinutes, countableByType: byType,
+    months, countableMinutes, requiredMinutes: t.requiredMinutes, countableByType: byType, windowEnds: first ? addMonths(first, 59) : null,
     // The 1.33 rule is published in the BCBA Handbook; for BCaBA it's an estimate until confirmed with the BACB.
     mixed: mixed ? (t.credential === 'bcba' ? 'bcba' : 'estimate') : false,
     unrestrictedPercent: total ? (unres / total) * 100 : 0, unrestrictedOk,
@@ -321,6 +323,8 @@ export const signatureMatches = (typed: string, name: string) => {
   const norm = (s: string) => s.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
   return norm(typed) !== '' && norm(typed) === norm(name);
 };
+
+const addMonths = (m: string, n: number) => { const [y, mo] = m.split('-').map(Number) as [number, number]; return new Date(Date.UTC(y, mo - 1 + n, 1)).toISOString().slice(0, 7) };
 
 /** BACB: the Monthly Fieldwork Verification Form must be signed by the last day of the following month (YYYY-MM-DD). */
 export const signDeadline = (month: string) => {

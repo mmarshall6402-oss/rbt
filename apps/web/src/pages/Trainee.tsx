@@ -415,8 +415,11 @@ function Pace({ program, profile }: { program: ProgramResult; profile: Profile }
     <div className="pace muted small center-text">
       {mixedNote}
       <p>{f ? <>At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</> : 'Your projected finish date appears after your first fully countable month.'}</p>
+      {program.windowEnds && <p className={f && f.finishMonth > program.windowEnds ? 'notice' : ''}>
+        Your BACB 5-year window ends {monthLabel(program.windowEnds)}.{f && f.finishMonth > program.windowEnds && ' At your current pace you won’t finish in time: plan more hours per month.'}
+      </p>}
       <p>
-        <label className="inline">Want to finish by <input type="month" min={now} value={target} onChange={e => pick(e.target.value)} /></label>
+        <label className="inline">Want to finish by <input type="month" min={now} max={program.windowEnds ?? undefined} value={target} onChange={e => pick(e.target.value)} /></label>
         {plan && (plan.feasible
           ? <> → log about <strong>{Math.ceil(plan.minutesPerWeek / 60)} h/week</strong> ({Math.ceil(plan.minutesPerMonth / 60)} h/month), with every month meeting its requirements.</>
           : <> → <strong>not possible</strong>: that needs {Math.ceil(plan.minutesPerMonth / 60)} h/month, over the {plan.maxMonthlyMinutes / 60} h monthly maximum.</>)}

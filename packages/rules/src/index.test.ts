@@ -311,3 +311,11 @@ describe('signing deadline (Handbook: unsigned by the end of the following month
     expect([p.countableMinutes, p.months[0]!.lost]).toEqual([0, true]);
   });
 });
+
+describe('five-year window', () => {
+  it('ends 60 calendar months after the first counted month (May 2020 → April 2025)', () => {
+    const month = [ind('2020-05-01', '00:00', '18:00'), ...[2, 3, 4, 5, 6, 7].map(d => sup(`2020-05-0${d}`, '09:00', '09:30', { contact: d === 2 ? 'observation' : 'contact' }))];
+    expect(evaluateProgram(month, C22).windowEnds).toBe('2025-04');
+    expect(evaluateProgram([], C22).windowEnds).toBeNull();
+  });
+});
