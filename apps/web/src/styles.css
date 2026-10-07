@@ -153,3 +153,5 @@ tr.desc td { white-space: normal; color: var(--muted); font-size: 13px; padding-
 .sign-form { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 8px; width: 100%; }
 .attest { margin: 0; padding-left: 18px; color: var(--muted); }
 .center-text { text-align: center; }
+label.inline { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
+.pace p { margin: 4px 0; }

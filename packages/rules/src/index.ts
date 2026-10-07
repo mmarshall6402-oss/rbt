@@ -290,3 +290,13 @@ export function forecast(program: ProgramResult, current: string, window = 3): {
   if (!minutes) return null;
   return { minutesPerMonth: Math.round(minutes / window), finishMonth: monthAt(Math.ceil((left * window) / minutes) - 1) };
 }
+
+/** Hours needed per month (from `current` through `target`, inclusive) to finish, and whether the monthly maximum allows it. */
+export function planFor(program: ProgramResult, profile: Profile, current: string, target: string, rules?: RuleSet) {
+  const [cy, cm] = current.split('-').map(Number) as [number, number], [ty, tm] = target.split('-').map(Number) as [number, number];
+  const months = (ty - cy) * 12 + (tm - cm) + 1;
+  const left = Math.max(0, program.requiredMinutes - program.countableMinutes);
+  if (months < 1) return null;
+  const minutesPerMonth = Math.ceil(left / months), max = targetsFor(profile, rules).rules.maxMonthlyMinutes;
+  return { months, minutesPerMonth, minutesPerWeek: Math.ceil((minutesPerMonth * 12) / 52), feasible: minutesPerMonth <= max, maxMonthlyMinutes: max };
+}

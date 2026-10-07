@@ -100,4 +100,11 @@ test('each supervisor’s form is checked on its own', async ({ page }) => {
   await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(1);
   await tabs.nth(0).click();
   await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(0);
+
+  // Finish-by planner: next month is impossible for a whole program
+  const ym = (add: number) => { const d = new Date(); d.setMonth(d.getMonth() + add, 1); return d.toLocaleDateString('en-CA').slice(0, 7) };
+  await page.getByLabel('Want to finish by').fill(ym(1));
+  await expect(page.getByText('not possible')).toBeVisible();
+  await page.getByLabel('Want to finish by').fill(ym(40));
+  await expect(page.getByText(/h\/week/)).toBeVisible();
 });

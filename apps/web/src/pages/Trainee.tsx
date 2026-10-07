@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { durationMinutes, evaluateForms, forecast, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, Deadline, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
@@ -53,7 +53,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         )}
         {result.data && <MonthRings m={result.data} profile={profile} />}
       </section>
-      {progress.data && <Pace program={progress.data} />}
+      {progress.data && <Pace program={progress.data} profile={profile} />}
 
       <div className="cols">
         <section className="card">
@@ -339,10 +339,21 @@ function StandardSettings({ me }: { me: Me }) {
   );
 }
 
-/** "When will I finish?" from the last three months' countable hours. */
-function Pace({ program }: { program: ProgramResult }) {
+/** "When will I finish?" from recent pace, and what it takes to finish by a chosen month. */
+function Pace({ program, profile }: { program: ProgramResult; profile: Profile }) {
+  const [target, setTarget] = useState(() => { try { return localStorage.getItem('ft.finishBy') ?? '' } catch { return '' } });
   if (program.complete) return <p className="notice">🎉 You've met the fieldwork hours. Keep your signed forms for 7 years.</p>;
-  const f = forecast(program, currentMonth());
-  if (!f) return <p className="muted small center-text">Your projected finish date appears after your first fully countable month.</p>;
-  return <p className="muted small center-text">At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</p>;
+  const now = currentMonth(), f = forecast(program, now), plan = target ? planFor(program, profile, now, target) : null;
+  const pick = (v: string) => { setTarget(v); try { localStorage.setItem('ft.finishBy', v) } catch { /* private mode */ } };
+  return (
+    <div className="pace muted small center-text">
+      <p>{f ? <>At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</> : 'Your projected finish date appears after your first fully countable month.'}</p>
+      <p>
+        <label className="inline">Want to finish by <input type="month" min={now} value={target} onChange={e => pick(e.target.value)} /></label>
+        {plan && (plan.feasible
+          ? <> → log about <strong>{Math.ceil(plan.minutesPerWeek / 60)} h/week</strong> ({Math.ceil(plan.minutesPerMonth / 60)} h/month), with every month meeting its requirements.</>
+          : <> → <strong>not possible</strong>: that needs {Math.ceil(plan.minutesPerMonth / 60)} h/month, over the {plan.maxMonthlyMinutes / 60} h monthly maximum.</>)}
+      </p>
+    </div>
+  );
 }

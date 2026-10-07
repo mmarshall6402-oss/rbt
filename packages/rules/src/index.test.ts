@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, forecast, formatHours, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, forecast, formatHours, planFor, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
@@ -222,5 +222,16 @@ describe('forecast', () => {
   it('is null with no recent pace, and the current month once complete', () => {
     expect(forecast(prog([month('2025-01', 100)], 100), '2026-10')).toBeNull();
     expect(forecast(prog([], 1500), '2026-10')?.finishMonth).toBe('2026-10');
+  });
+});
+
+describe('planFor', () => {
+  const p = { months: [], countableMinutes: 1200 * 60, requiredMinutes: 1500 * 60 } as unknown as ProgramResult;
+  it('spreads the remaining hours over the months left, inclusive', () => {
+    expect(planFor(p, C22, '2026-10', '2026-12')).toMatchObject({ months: 3, minutesPerMonth: 6000, minutesPerWeek: 1385, feasible: true });
+  });
+  it('flags plans over the monthly maximum, and past targets', () => {
+    expect(planFor(p, C22, '2026-10', '2026-10')).toMatchObject({ feasible: false, maxMonthlyMinutes: 7800 });
+    expect(planFor(p, C22, '2026-10', '2026-09')).toBeNull();
   });
 });
