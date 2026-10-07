@@ -2,8 +2,9 @@ resource "aws_cognito_user_pool" "main" {
   name                     = local.prefix
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
-  mfa_configuration        = "OPTIONAL"
-  deletion_protection      = "ACTIVE"
+  # Cognito can't require MFA for one role only; production requires an authenticator app for everyone (HIPAA access control).
+  mfa_configuration   = var.mfa_required ? "ON" : "OPTIONAL"
+  deletion_protection = "ACTIVE"
 
   software_token_mfa_configuration {
     enabled = true

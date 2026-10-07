@@ -42,6 +42,7 @@ module "app" {
   db_backup_retention_days    = 7
   api_min_count               = 1
   monthly_budget_usd          = 60
+  mfa_required                = false # no real client data in staging
 }
 
 output "app" { value = module.app }

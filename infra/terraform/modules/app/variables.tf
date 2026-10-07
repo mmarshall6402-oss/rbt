@@ -77,3 +77,9 @@ variable "pdf_retention_days" {
   default     = 2557
   description = "Object-lock retention for signed forms (BACB: keep 7 years)"
 }
+
+variable "mfa_required" {
+  description = "Require an authenticator-app second factor for every sign-in (production: true)"
+  type        = bool
+  default     = true
+}
