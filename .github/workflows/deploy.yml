@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Build once; every environment deploys this exact image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with: { context: ., file: apps/api/Dockerfile, tags: 'api:${{ github.sha }}', outputs: 'type=docker,dest=/tmp/api.tar' }
       - uses: actions/upload-artifact@v4
         with: { name: api-image, path: /tmp/api.tar, retention-days: 3 }
