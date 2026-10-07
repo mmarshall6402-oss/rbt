@@ -31,7 +31,6 @@ export interface RuleSet {
   edition: Edition;
   minMonthlyMinutes: number;
   maxMonthlyMinutes: number;
-  overCapPolicy: 'fail' | 'cap'; // 'cap': hours over the max don't count; 'fail': the whole month doesn't count
   contactCounting: 'perEntry' | 'perDay'; // Handbook: a contact is "a real-time interaction", so each one counts
   supervisionPerMille: ByCredential<number>; // 75 = 7.5% (per-mille keeps the math in integers)
   minContacts: Record<FieldworkType, number> | null; // null = not required
@@ -48,7 +47,6 @@ export const RULESETS: Readonly<Record<Edition, RuleSet>> = {
     edition: '2022',
     minMonthlyMinutes: h(20),
     maxMonthlyMinutes: h(130),
-    overCapPolicy: 'fail', // Handbook: "all requirements ... must be met for the hours to count"; >130 h breaks one
     contactCounting: 'perEntry',
     supervisionPerMille: { bcba: { supervised: 50, concentrated: 100 }, bcaba: { supervised: 50, concentrated: 100 } },
     minContacts: { supervised: 4, concentrated: 6 },
@@ -62,7 +60,6 @@ export const RULESETS: Readonly<Record<Edition, RuleSet>> = {
     edition: '2027',
     minMonthlyMinutes: h(20),
     maxMonthlyMinutes: h(160),
-    overCapPolicy: 'fail', // 2027 Requirements use the same "maximum of 160 hours" wording as 2022's 130
     contactCounting: 'perEntry',
     supervisionPerMille: { bcba: { supervised: 50, concentrated: 75 }, bcaba: { supervised: 50, concentrated: 100 } },
     minContacts: null, // supervisory contacts are no longer required
@@ -171,7 +168,8 @@ export interface MonthResult {
   rulesVersion: string;
   summary: MonthSummary;
   checks: Check[];
-  passed: boolean;
+  passed: boolean; // every requirement met as logged
+  countable: { independentMinutes: number; supervisedMinutes: number }; // after BACB adjustments: what goes on the M-FVF
   countableMinutes: number;
 }
 
@@ -180,13 +178,9 @@ export function evaluateMonth(month: string, entries: readonly Entry[], profile:
   if (stray) throw new RangeError(`Entry dated ${stray.workDate} is outside ${month}`);
   const t = targetsFor(profile, rules), r = t.rules, s = summarize(entries, r);
   const supNeeded = s.totalMinutes ? supervisedMinutesNeeded(s.totalMinutes, s.supervisedMinutes, t.supervisionPerMille) : 0;
-  const over = s.totalMinutes - r.maxMonthlyMinutes;
   const checks: Check[] = [
     { id: 'minHours', ok: s.totalMinutes >= r.minMonthlyMinutes, label: `Minimum ${r.minMonthlyMinutes / 60} hours`, needed: Math.max(0, r.minMonthlyMinutes - s.totalMinutes) },
-    {
-      id: 'maxHours', ok: r.overCapPolicy === 'cap' || over <= 0, needed: Math.max(0, over),
-      label: r.overCapPolicy === 'cap' ? `Hours over ${r.maxMonthlyMinutes / 60} don't count` : `Maximum ${r.maxMonthlyMinutes / 60} hours`,
-    },
+    { id: 'maxHours', ok: s.totalMinutes <= r.maxMonthlyMinutes, label: `Maximum ${r.maxMonthlyMinutes / 60} hours`, needed: Math.max(0, s.totalMinutes - r.maxMonthlyMinutes) },
     { id: 'supervision', ok: s.totalMinutes > 0 && supNeeded === 0, label: `Minimum ${percentLabel(t.supervisionPerMille)} supervision`, needed: supNeeded },
     { id: 'groupShare', ok: s.groupMinutes * 100 <= r.maxGroupPercent * s.supervisedMinutes, label: `Maximum ${r.maxGroupPercent}% group supervision`, needed: Math.max(0, s.groupMinutes - Math.floor(r.maxGroupPercent * s.supervisedMinutes / 100)) },
   ];
@@ -195,8 +189,34 @@ export function evaluateMonth(month: string, entries: readonly Entry[], profile:
   checks.push(t.observation.unit === 'count'
     ? { id: 'observations', ok: s.observations >= t.observation.min, label: `Minimum ${t.observation.min} observation with client`, needed: Math.max(0, t.observation.min - s.observations) }
     : { id: 'observations', ok: s.observationMinutes >= t.observation.min, label: `Minimum ${t.observation.min} minutes observed with client`, needed: Math.max(0, t.observation.min - s.observationMinutes) });
-  const passed = checks.every(c => c.ok);
-  return { month, rulesVersion: r.version, summary: s, checks, passed, countableMinutes: passed ? Math.min(s.totalMinutes, r.maxMonthlyMinutes) : 0 };
+  const passed = checks.every(c => c.ok), countable = countableHours(s, checks, t, profile.type);
+  return { month, rulesVersion: r.version, summary: s, checks, passed, countable, countableMinutes: countable.independentMinutes + countable.supervisedMinutes };
+}
+
+/**
+ * The hours a month can still count, recorded on the M-FVF. Handbook, "Adjusting and Documenting Fieldwork Hours When
+ * Monthly Requirements Are Not Met": supervised fieldwork is trimmed to meet each requirement; "concentrated hours may
+ * not be prorated or adjusted", so a concentrated month that misses anything counts nothing. The table is written for
+ * the 2022 requirements; the 2027 rules get the same adjustments for the requirements they share.
+ */
+function countableHours(s: MonthSummary, checks: Check[], t: ReturnType<typeof targetsFor>, type: FieldworkType) {
+  const failed = new Set(checks.filter(c => !c.ok).map(c => c.id)), r = t.rules;
+  if (!failed.size) return { independentMinutes: s.independentMinutes, supervisedMinutes: s.supervisedMinutes };
+  // No observation, or fewer than 20 hours: "No hours are eligible for the month."
+  if (type === 'concentrated' || failed.has('minHours') || failed.has('observations')) return { independentMinutes: 0, supervisedMinutes: 0 };
+  const individual = s.supervisedMinutes - s.groupMinutes;
+  // Group over its share: "Reduce the group supervision hours until they equal (or are less than) the individual supervision hours."
+  let sup = Math.min(r.maxMonthlyMinutes, individual + Math.min(s.groupMinutes, Math.floor((individual * r.maxGroupPercent) / (100 - r.maxGroupPercent))));
+  // Over the maximum: "Remove independent hours for the month until the total equals" the maximum.
+  let ind = Math.min(s.independentMinutes, r.maxMonthlyMinutes - sup);
+  // Supervision too low: "Decrease the independent hours for the month until the % of supervision meets" the minimum.
+  ind = Math.min(ind, Math.floor((sup * (1000 - t.supervisionPerMille)) / t.supervisionPerMille));
+  // Too few contacts (2022): prorate the hours (up to the maximum) by the share of required contacts that occurred.
+  if (t.minContacts !== null && s.contacts < t.minContacts) {
+    ind = Math.floor((ind * s.contacts) / t.minContacts);
+    sup = Math.floor((sup * s.contacts) / t.minContacts);
+  }
+  return { independentMinutes: ind, supervisedMinutes: sup };
 }
 
 export interface ProgramResult {
@@ -242,7 +262,7 @@ export const MIXED_CONCENTRATED_MULTIPLIER = 1.33;
 
 export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet, typeOf?: FormType): ProgramResult {
   const months = evaluateForms(entries, profile, rules, typeOf);
-  const passing = months.filter(m => m.passed);
+  const passing = months.filter(m => m.countableMinutes > 0);
   const byType = { supervised: 0, concentrated: 0 };
   for (const m of passing) byType[m.type!] += m.countableMinutes;
   const mixed = byType.supervised > 0 && byType.concentrated > 0;

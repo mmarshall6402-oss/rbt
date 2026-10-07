@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, download, profileOf, useEntries, useFinals, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
-import { AppShell, Checklist, Deadline, ReminderToggle, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
+import { AppShell, Checklist, countableNote, Deadline, ReminderToggle, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
 import { ATTESTATIONS, FINAL_ATTESTATIONS, type Edition } from '@fieldtrack/rules';
 import { EntriesTable } from './Trainee';
 
@@ -102,7 +102,7 @@ export function TraineeReview({ me }: { me: Me }) {
           <p>{signStatus(v)}</p>
           {v?.traineeSignedAt && !v.supervisorSignedAt && (
             <>
-              {result.data && !result.data.passed && <p className="notice">⚠ This month doesn't meet every requirement. Signed months still won't count toward the total.</p>}
+              {result.data && !result.data.passed && <p className="notice">⚠ This month doesn't meet every requirement. {countableNote(result.data)} The form records the adjusted hours.</p>}
               {signing
                 ? <SignForm statements={ATTESTATIONS[edition].statements} name={me.fullName} cta="Sign & lock month" busy={sign.isPending} onSign={sign.mutate} onCancel={() => setSigning(false)} />
                 : <button className="primary" onClick={() => setSigning(true)}>Sign {monthLabel(month)}…</button>}

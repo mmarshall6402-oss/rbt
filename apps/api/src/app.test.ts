@@ -29,6 +29,11 @@ const as = (sub: string) => {
 };
 const trainee = as('trainee'), other = as('other'), sup = as('sup'), sup2 = as('sup2');
 const entry = (o: object = {}) => ({ supervisorId: ids.sup, workDate: '2026-09-01', startTime: '08:00', endTime: '10:00', kind: 'independent', ...o });
+/** A month that meets every 2022 concentrated requirement: 18 h independent + six 30-min contacts (one observed) = 21 h, 14% supervised. */
+const logPassingMonth = async (month: string, independentId = randomUUID()) => {
+  await trainee.log({ workDate: `${month}-01`, startTime: '00:00', endTime: '18:00' }, independentId);
+  for (let d = 2; d <= 7; d++) await trainee.log({ workDate: `${month}-0${d}`, startTime: '09:00', endTime: '09:30', kind: 'supervised', contact: d === 2 ? 'observation' : 'contact' });
+};
 
 /** Runs SQL as the restricted app role, the way the API does, for a given user. */
 async function asRole<T>(userId: string, fn: (trx: Parameters<Parameters<ReturnType<typeof db.transaction>['execute']>[0]>[0]) => Promise<T>) {
@@ -533,11 +538,11 @@ describe.skipIf(!url)('API', () => {
 
     it('totals the signed monthly forms; the supervisor signs; a newly signed month voids the signature', async () => {
       expect((await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`)).statusCode).toBe(409); // nothing signed yet
-      await trainee.log({ workDate: '2026-08-03', endTime: '11:00' });
-      await trainee.log({ workDate: '2026-09-01' });
+      await logPassingMonth('2026-08');
+      await logPassingMonth('2026-09');
       await signMonth('2026-08');
       const get = await finalForm(await trainee.get(`/final/form.pdf?supervisorId=${ids.sup}`));
-      expect(['START_DATE', 'END_DATE', 'INDEPENDENT_HOURS 2', 'TOTAL_MONTHS_OF_FIELDWORK_OBTAINED 2', 'INDEPENDENT_HOURS'].map(get)).toEqual(['08/2026', '08/2026', '3.00', '1', '']); // concentrated column only
+      expect(['START_DATE', 'END_DATE', 'INDEPENDENT_HOURS 2', 'TOTAL_MONTHS_OF_FIELDWORK_OBTAINED 2', 'INDEPENDENT_HOURS'].map(get)).toEqual(['08/2026', '08/2026', '18.00', '1', '']); // concentrated column only
 
       expect((await trainee.post('/final/sign', { traineeId: ids.trainee, signature: 'Trainee', attest: true })).statusCode).toBe(403);
       expect((await sup.post('/final/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).statusCode).toBe(200);
@@ -546,7 +551,7 @@ describe.skipIf(!url)('API', () => {
 
       await signMonth('2026-09');
       const after = await finalForm(await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`));
-      expect([after('END_DATE'), after('INDEPENDENT_HOURS 2'), after('SUPERVISOR_SIGNATURE_DATE')]).toEqual(['09/2026', '5.00', '']); // needs re-signing
+      expect([after('END_DATE'), after('INDEPENDENT_HOURS 2'), after('SUPERVISOR_SIGNATURE_DATE')]).toEqual(['09/2026', '36.00', '']); // needs re-signing
     });
 
     it('only the linked supervisor can sign, with their own name', async () => {
@@ -567,29 +572,37 @@ describe.skipIf(!url)('API', () => {
 
     it('prefills the official form, carries signatures only while valid, and locks once both sign', async () => {
       const id = randomUUID();
-      await trainee.log({ endTime: '10:20' }, id); // 2 h 20 m independent
-      await trainee.log({ workDate: '2026-09-02', kind: 'supervised', contact: 'contact', endTime: '09:00' });
+      await logPassingMonth('2026-09', id);
       await trainee.patch('/me', { fieldworkState: 'Ohio', fieldworkCountry: 'United States' });
       let get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
       expect(['TRAINEE_NAME', 'TRAINEE_CERTIFICATE_MONTH/YEAR', 'TRAINEE_FIELDWORK_STATE', 'RESPONSIBLE_SUPERVISOR_NAME', 'INDEPENDENT_HOURS', 'SUPERVISED_HOURS', 'TOTAL_FIELDWORK', 'PERCENT_HOURS_SUPERVISED', 'TRAINEE_SIGNATURE_DATE'].map(get))
-        .toEqual(['Trainee', '09/2026', 'Ohio', 'Sup', '2.33', '1.00', '3.33', String(1 / 3.33), '']); // percent stored as the form's own fraction
+        .toEqual(['Trainee', '09/2026', 'Ohio', 'Sup', '18.00', '3.00', '21.00', String(3 / 21), '']); // percent stored as the form's own fraction
 
       await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
       expect((await form(await sup.get(`${url}?traineeId=${ids.trainee}`)))('TRAINEE_SIGNATURE_DATE')).toMatch(/^\d\d\/\d\d\/2026$/);
-      await trainee.log({ endTime: '10:00' }, id);
+      await trainee.log({ workDate: '2026-09-01', startTime: '00:00', endTime: '17:00' }, id);
       get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
-      expect([get('TRAINEE_SIGNATURE_DATE'), get('INDEPENDENT_HOURS')]).toEqual(['', '2.00']); // stale signature dropped
+      expect([get('TRAINEE_SIGNATURE_DATE'), get('INDEPENDENT_HOURS')]).toEqual(['', '17.00']); // stale signature dropped
 
       await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
       await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true });
       expect((await form(await trainee.get(`${url}?supervisorId=${ids.sup}`)))('TRAINEE_NAME')).toBeNull();
     });
 
+    it('records the adjusted hours when a finished month misses a requirement (Handbook table)', async () => {
+      await trainee.patch('/me', { fieldworkType: 'supervised' });
+      for (let d = 1; d <= 4; d++) await trainee.log({ workDate: `2026-09-0${d}`, startTime: '08:00', endTime: '18:00' }); // 40 h
+      for (let d = 5; d <= 8; d++) await trainee.log({ workDate: `2026-09-0${d}`, startTime: '09:00', endTime: '09:30', kind: 'supervised', contact: d === 5 ? 'observation' : 'contact' }); // 2 h = 4.8%
+      const get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
+      expect([get('INDEPENDENT_HOURS'), get('SUPERVISED_HOURS')]).toEqual(['38.00', '2.00']); // independent hours cut until 5% is met
+    });
+
     it('uses the 2027 form for 2027 trainees', async () => {
       await trainee.patch('/me', { rulesEdition: '2027' });
-      await trainee.log({ workDate: '2026-09-03', kind: 'supervised', contact: 'observation', endTime: '09:30' });
+      await trainee.log({ workDate: '2026-09-01', startTime: '00:00', endTime: '20:00' });
+      await trainee.log({ workDate: '2026-09-03', kind: 'supervised', contact: 'observation', startTime: '09:00', endTime: '11:00' });
       const get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
-      expect(['Supervised_Hours', 'Supervised_Minutes', 'Observation_Hours', 'Independent_Minutes 3', 'Total_Fieldwork_Hours'].map(get)).toEqual(['1', '30', '1', '30', '1']);
+      expect(['Supervised_Hours', 'Supervised_Minutes', 'Observation_Hours', 'Independent_Minutes 3', 'Total_Fieldwork_Hours'].map(get)).toEqual(['2', '0', '2', '0', '22']);
     });
 
     it('only for linked pairs', async () => {

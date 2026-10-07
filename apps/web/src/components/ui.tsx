@@ -76,16 +76,27 @@ export function MonthRings({ m, profile }: { m: MonthResult; profile: Profile })
 export const standardLabel = (p: Profile) =>
   `${(p.credential ?? 'bcba').toUpperCase()} · ${p.type === 'concentrated' ? 'Concentrated' : 'Supervised'} · ${p.edition ?? '2027'} rules`;
 
+/** What a month that misses a requirement can still count, per the BACB's adjustment table. */
+export const countableNote = (m: MonthResult) =>
+  m.passed || !m.summary.totalMinutes ? null
+    : m.countableMinutes > 0 ? `If the month ends like this, ${hrs(m.countableMinutes)} of ${hrs(m.summary.totalMinutes)} h can count after the BACB's required adjustment.`
+    : m.type === 'concentrated' ? 'If the month ends like this, none of its hours count (concentrated hours can’t be adjusted).'
+    : 'If the month ends like this, none of its hours count.';
+
 export function Checklist({ m }: { m: MonthResult }) {
+  const note = countableNote(m);
   return (
-    <ul className="checklist">
-      {m.checks.map(c => (
-        <li key={c.id} className={c.ok ? 'ok' : 'no'}>
-          <span aria-hidden>{c.ok ? '✓' : '✗'}</span> {c.label}
-          {!c.ok && c.needed !== undefined && <small>{neededText(c.id, c.needed, c.label.includes('minutes'))}</small>}
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="checklist">
+        {m.checks.map(c => (
+          <li key={c.id} className={c.ok ? 'ok' : 'no'}>
+            <span aria-hidden>{c.ok ? '✓' : '✗'}</span> {c.label}
+            {!c.ok && c.needed !== undefined && <small>{neededText(c.id, c.needed, c.label.includes('minutes'))}</small>}
+          </li>
+        ))}
+      </ul>
+      {note && <p className="muted small">{note}</p>}
+    </>
   );
 }
 
@@ -119,7 +130,7 @@ export function HoursTrend({ months, names = {} }: { months: MonthResult[]; name
       {hv && (
         <div className="tooltip" style={{ left: `${((pad.l + (hover! + 0.5) * bw) / W) * 100}%` }}>
           <strong>{monthLabel(hv.month)}{hv.supervisorId && names[hv.supervisorId] ? ` · ${names[hv.supervisorId]}` : ''}</strong>
-          <span>{hrs(hv.summary.totalMinutes)} h · {hv.passed ? '✓ counts' : '✗ does not count'}</span>
+          <span>{hrs(hv.summary.totalMinutes)} h · {hv.passed ? '✓ counts' : hv.countableMinutes > 0 ? `${hrs(hv.countableMinutes)} h count after adjustment` : '✗ does not count'}</span>
         </div>
       )}
     </div>

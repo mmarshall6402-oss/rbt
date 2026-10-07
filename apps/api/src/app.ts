@@ -198,7 +198,8 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
     if (!months.length) throw new HttpError(409, 'No signed monthly forms with this supervisor yet');
     const totals: Record<FieldworkType, TypeTotals | null> = { supervised: null, concentrated: null };
     for (const m of months) {
-      const s = (m.summary as { summary: { independentMinutes: number; supervisedMinutes: number } }).summary;
+      type Hours = { independentMinutes: number; supervisedMinutes: number };
+      const snap = m.summary as { summary: Hours; countable?: Hours }, s = snap.countable ?? snap.summary; // the hours recorded on each M-FVF
       const t = (totals[m.fieldworkType] ??= { independentMinutes: 0, supervisedMinutes: 0, months: 0 });
       t.independentMinutes += s.independentMinutes; t.supervisedMinutes += s.supervisedMinutes; t.months++;
     }
@@ -492,7 +493,9 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
         return fillMonthlyForm({
           edition: editionOf(result.rulesVersion), fieldworkType: v?.fieldworkType ?? t.fieldworkType!, month,
           trainee: { name: t.fullName, bacbId: t.bacbId }, supervisor: { name: s.fullName, bacbId: s.bacbId },
-          state: t.fieldworkState, country: t.fieldworkCountry, summary: result.summary,
+          state: t.fieldworkState, country: t.fieldworkCountry,
+          // Handbook: record the adjusted hours on the M-FVF. A draft of the month in progress shows hours as logged.
+          summary: month < today().slice(0, 7) || v?.traineeSignedAt ? { ...result.summary, ...result.countable } : result.summary,
           traineeSigned: traineeSignatureValid ? { name: v!.traineeSignature ?? t.fullName, at: v!.traineeSignedAt! } : null,
           supervisorSigned: v?.supervisorSignedAt ? { name: v.supervisorSignature ?? s.fullName, at: v.supervisorSignedAt } : null,
           reference: v?.id ?? 'unsigned draft',

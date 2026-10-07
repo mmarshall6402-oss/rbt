@@ -95,13 +95,40 @@ describe('evaluateMonth', () => {
   describe('over 130 hours', () => {
     const big = (m = '2026-09') => [...passingMonth(m), ...[10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map(d => ind(`${m}-${d}`, '08:00', '17:00')),
       ...[24, 25].map(d => sup(`${m}-${d}`, '08:00', '17:00'))]; // 20 + 126 + 18 = 164h, 12.2% supervised
-    it('fails the month under the default (strict) policy', () => {
+    it('concentrated: "may not be prorated or adjusted", so the month counts nothing', () => {
       const r = evaluateMonth('2026-09', big(), C22);
-      expect(r.passed).toBe(false);
-      expect(r.countableMinutes).toBe(0);
+      expect([r.passed, r.countableMinutes]).toEqual([false, 0]);
     });
-    it('counts up to the cap under the "cap" policy', () =>
-      expect(evaluateMonth('2026-09', big(), C22, withRules({ overCapPolicy: 'cap' })).countableMinutes).toBe(7800));
+    it('supervised: remove independent hours until the total equals 130', () => {
+      const r = evaluateMonth('2026-09', big(), S22);
+      expect(r.passed).toBe(false);
+      expect(r.countableMinutes).toBe(130 * 60);
+      expect(r.countable.supervisedMinutes).toBe(r.summary.supervisedMinutes);
+    });
+  });
+
+  describe('adjusting supervised months that miss a requirement (Handbook table)', () => {
+    const days = (n: number, from = 1) => Array.from({ length: n }, (_, i) => ind(`2026-09-${String(from + i).padStart(2, '0')}`, '08:00', '18:00'));
+    const contacts = (n: number, o: Partial<Entry> = {}) => Array.from({ length: n }, (_, i) => sup(`2026-09-2${i}`, '09:00', '09:30', { contact: i === 0 ? 'observation' : 'contact', ...o }));
+    it('supervision too low: decrease independent hours until the % is met', () => {
+      const r = evaluateMonth('2026-09', [...days(4), ...contacts(4)], S22); // 40 h + 2 h = 4.76%
+      expect(check(r, 'supervision').ok).toBe(false);
+      expect(r.countable).toEqual({ independentMinutes: 2280, supervisedMinutes: 120 }); // 120 / 2400 = 5%
+    });
+    it('too few contacts: prorate by the share of contacts that happened', () => {
+      const r = evaluateMonth('2026-09', [...days(3), ...contacts(2).map(e => ({ ...e, endTime: '10:00' }))], S22); // 2 of 4
+      expect(r.countable).toEqual({ independentMinutes: 900, supervisedMinutes: 60 });
+    });
+    it('group over individual: reduce group hours to equal individual', () => {
+      const group = contacts(4).map((e, i) => ({ ...e, endTime: '10:00', isGroup: i > 0 })); // 1 h individual, 3 h group
+      const r = evaluateMonth('2026-09', [...days(3), ...group], S22);
+      expect(check(r, 'groupShare').ok).toBe(false);
+      expect(r.countable).toEqual({ independentMinutes: 1800, supervisedMinutes: 120 });
+    });
+    it('no observation, or under 20 hours: nothing counts', () => {
+      expect(evaluateMonth('2026-09', [...days(3), ...contacts(4, { contact: 'contact' })], S22).countableMinutes).toBe(0);
+      expect(evaluateMonth('2026-09', [...days(1), ...contacts(4)], S22).countableMinutes).toBe(0);
+    });
   });
 
   it('rejects entries from another month', () =>
