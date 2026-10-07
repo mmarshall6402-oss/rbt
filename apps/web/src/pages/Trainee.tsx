@@ -73,7 +73,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
       </div>
 
       <section className="card">
-        <div className="row spread"><h2>Entries</h2><button className="ghost small" onClick={() => void download('/entries/export.csv', 'fieldwork-hours.csv').catch(e => alert(e.message))}>Export all hours (CSV)</button></div>
+        <div className="row spread"><h2>Entries</h2><span className="row">Export all hours{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}`, `fieldwork-hours.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div>
         <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} onEdit={e => { setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
       </section>
 

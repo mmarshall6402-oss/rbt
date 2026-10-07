@@ -356,6 +356,17 @@ describe.skipIf(!url)('API', () => {
     expect((await sup2.get(`/entries/export.csv?traineeId=${ids.other}`)).statusCode).toBe(404);
   });
 
+  it('exports a printable PDF hours log, scoped like everything else', async () => {
+    await trainee.log();
+    await trainee.log({ workDate: '2026-06-02', supervisorId: ids.sup2 });
+    const res = await trainee.get('/entries/export.pdf');
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect((await PDFDocument.load(res.rawPayload)).getTitle()).toBe('Fieldwork hours log · Trainee');
+    expect((await sup.get(`/entries/export.pdf?traineeId=${ids.trainee}`)).statusCode).toBe(200);
+    expect((await sup2.get(`/entries/export.pdf?traineeId=${ids.other}`)).statusCode).toBe(404);
+    if (process.env.HOURS_LOG_OUT) (await import('node:fs')).writeFileSync(process.env.HOURS_LOG_OUT, res.rawPayload);
+  });
+
   describe('BACB monthly verification form (PDF)', () => {
     const form = async (res: Awaited<ReturnType<typeof trainee.get>>) => {
       expect(res.statusCode).toBe(200);

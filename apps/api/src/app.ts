@@ -6,6 +6,7 @@ import { ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatche
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillMonthlyForm } from './forms.js';
+import { hoursLogPdf } from './hourslog.js';
 import type { DB, User } from './db.js';
 
 export class HttpError extends Error {
@@ -257,6 +258,28 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
         return toCsv([['Date', 'Start', 'End', 'Hours', 'Type', 'Supervisor', 'Restricted hours', 'Unrestricted hours', 'Group', 'Contact', 'Format', 'Description'], ...rows]);
       });
       return reply.type('text/csv; charset=utf-8').header('cache-control', 'no-store').header('content-disposition', 'attachment; filename="fieldwork-hours.csv"').send(csv);
+    });
+
+    api.get('/entries/export.pdf', async (req, reply) => {
+      const pdf = await asUser(req, async (trx, user) => {
+        const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
+        const [entries, profile, t, people, signed] = await Promise.all([
+          listEntries(trx, s), traineeProfile(trx, s.traineeId),
+          trx.selectFrom('users').select(['fullName', 'bacbId']).where('id', '=', s.traineeId).executeTakeFirstOrThrow(),
+          trx.selectFrom('users').select(['id', 'fullName']).where('role', '=', 'supervisor').execute(),
+          trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'supervisorSignedAt']).where('traineeId', '=', s.traineeId).where('supervisorSignedAt', 'is not', null)
+            .$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).execute(),
+        ]);
+        const program = evaluateProgram(entries, profile);
+        return hoursLogPdf({
+          trainee: { name: t.fullName, bacbId: t.bacbId }, entries, forms: program.months,
+          standard: `${profile.credential?.toUpperCase()} · ${profile.type === 'concentrated' ? 'Concentrated' : 'Supervised'} · ${profile.edition} rules`,
+          supervisors: new Map(people.map(p => [p.id, p.fullName])),
+          signedAt: new Map(signed.map(v => [`${String(v.month).slice(0, 7)}|${v.supervisorId}`, v.supervisorSignedAt!])),
+          countableMinutes: program.countableMinutes, requiredMinutes: program.requiredMinutes,
+        });
+      });
+      return reply.type('application/pdf').header('cache-control', 'no-store').header('content-disposition', 'attachment; filename="fieldwork-hours.pdf"').send(Buffer.from(pdf));
     });
 
     /**
