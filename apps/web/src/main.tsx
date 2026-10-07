@@ -8,7 +8,7 @@ import { Login, AuthCallback } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { TraineeDashboard } from './pages/Trainee';
 import { SupervisorDashboard, TraineeReview } from './pages/Supervisor';
-import { persister, queryClient } from './query';
+import { persistOptions, queryClient } from './query';
 import { ErrorBoundary, initErrorTracking, setErrorUser } from './observability';
 import './styles.css';
 
@@ -39,7 +39,7 @@ function Crash() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary fallback={<Crash />}>
-    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: 7 * 24 * 3600_000, buster: 'v1' }}>
+    <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Landing />} />

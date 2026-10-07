@@ -9,14 +9,14 @@ export function Signup() {
   const [params, setParams] = useSearchParams();
   const role = params.get('role') === 'supervisor' ? 'supervisor' : 'trainee';
   const me = useMe(), nav = useNavigate(), qc = useQueryClient();
-  const [f, setF] = useState({ email: '', fullName: '', fieldworkType: 'concentrated', bacbId: '' });
+  const [f, setF] = useState({ email: '', fullName: '', fieldworkType: 'concentrated', credential: 'bcba', rulesEdition: '2027', bacbId: '' });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
 
   const signup = useMutation({
     mutationFn: async () => {
       if (authMode === 'dev') await signIn(f.email, '/signup');
       return api<Me>('/signup', 'POST', role === 'trainee'
-        ? { role, fullName: f.fullName, fieldworkType: f.fieldworkType, bacbId: f.bacbId || undefined }
+        ? { role, fullName: f.fullName, fieldworkType: f.fieldworkType, credential: f.credential, rulesEdition: f.rulesEdition, bacbId: f.bacbId || undefined }
         : { role, fullName: f.fullName, bacbId: f.bacbId });
     },
     onSuccess: user => { qc.setQueryData(['me'], user); nav(homeFor(user.role)) },
@@ -42,10 +42,26 @@ export function Signup() {
             {authMode === 'dev' && <label>Email<input type="email" required value={f.email} onChange={set('email')} /></label>}
             <label>Full name<input required value={f.fullName} onChange={set('fullName')} autoComplete="name" /></label>
             {role === 'trainee' && (
+              <div className="row">
+                <label>Credential
+                  <select value={f.credential} onChange={set('credential')}>
+                    <option value="bcba">BCBA</option>
+                    <option value="bcaba">BCaBA</option>
+                  </select>
+                </label>
+                <label>When will you apply?
+                  <select value={f.rulesEdition} onChange={set('rulesEdition')}>
+                    <option value="2027">On or after Jan 1, 2027</option>
+                    <option value="2022">Before Jan 1, 2027</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            {role === 'trainee' && (
               <label>Fieldwork type
                 <select value={f.fieldworkType} onChange={set('fieldworkType')}>
-                  <option value="concentrated">Concentrated (10% supervision, 1,500 h)</option>
-                  <option value="supervised">Supervised (5% supervision, 2,000 h)</option>
+                  <option value="concentrated">Concentrated (more supervision, fewer hours)</option>
+                  <option value="supervised">Supervised (5% supervision)</option>
                 </select>
               </label>
             )}

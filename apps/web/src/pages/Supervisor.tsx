@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
-import type { FieldworkType } from '@fieldtrack/rules';
-import { api, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
-import { AppShell, Checklist, ErrorText, MonthNav, MonthRings, hrs, monthLabel, useMonthParam } from '../components/ui';
+import { api, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
+import { AppShell, Checklist, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
 import { EntriesTable } from './Trainee';
 
 const signStatus = (v?: Verification) =>
@@ -37,14 +36,14 @@ export function SupervisorDashboard({ me }: { me: Me }) {
         {!list.length ? <p className="muted">No trainees yet. Share your invite code to get started.</p> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Trainee</th><th>Type</th><th className="num">Hours</th><th className="num">Supervised</th><th>Requirements</th><th>Sign-off</th><th /></tr></thead>
+              <thead><tr><th>Trainee</th><th>Standard</th><th className="num">Hours</th><th className="num">Supervised</th><th>Requirements</th><th>Sign-off</th><th /></tr></thead>
               <tbody>
                 {list.map((t, i) => {
                   const m = months[i]?.data, s = m?.summary, failing = m?.checks.filter(c => !c.ok).length ?? 0;
                   return (
                     <tr key={t.id}>
                       <td><strong>{t.fullName}</strong><div className="muted small">{t.email}</div></td>
-                      <td>{t.fieldworkType === 'supervised' ? 'Supervised' : 'Concentrated'}</td>
+                      <td className="small">{profileOf(t) ? standardLabel(profileOf(t)!) : '—'}</td>
                       <td className="num">{s ? hrs(s.totalMinutes) : '…'}</td>
                       <td className="num">{s?.totalMinutes ? `${(s.supervisedMinutes / s.totalMinutes * 100).toFixed(1)}%` : '—'}</td>
                       <td>{m ? (m.passed ? <span className="ok">✓ All met</span> : <span className="no">✗ {failing} not met</span>) : '…'}</td>
@@ -91,7 +90,7 @@ export function TraineeReview({ me }: { me: Me }) {
       <h1>{trainee?.fullName ?? 'Trainee'} <span className="muted small">{monthLabel(month)}</span></h1>
       <p className="muted small">Showing only hours logged under you.</p>
 
-      <section className="rings-row">{result.data && trainee?.fieldworkType && <MonthRings m={result.data} type={trainee.fieldworkType as FieldworkType} />}</section>
+      <section className="rings-row">{result.data && trainee && profileOf(trainee) && <MonthRings m={result.data} profile={profileOf(trainee)!} />}</section>
 
       <div className="cols">
         <section className="card"><h2>Requirements</h2>{result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}</section>

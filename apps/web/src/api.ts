@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ContactType, EntryKind, FieldworkType, MonthResult, ProgramResult } from '@fieldtrack/rules';
+import type { ContactType, Credential, Edition, EntryKind, FieldworkType, MonthResult, Profile, ProgramResult } from '@fieldtrack/rules';
 import { authHeaders } from './auth';
 import { useSyncState, withPending } from './sync';
 
@@ -8,6 +8,7 @@ export type { MonthResult, ProgramResult };
 export interface Me {
   id: string; email: string; fullName: string; role: 'trainee' | 'supervisor' | 'admin';
   bacbId: string | null; fieldworkType: FieldworkType | null; inviteCode: string | null;
+  credential: Credential | null; rulesEdition: Edition | null;
 }
 export interface EntryInput {
   supervisorId: string; workDate: string; startTime: string; endTime: string; kind: EntryKind;
@@ -16,7 +17,7 @@ export interface EntryInput {
 export interface EntryDto extends EntryInput { id: string; createdAt: string; updatedAt: string; pending?: boolean }
 export interface Person { id: string; fullName: string; email: string; startsOn: string; endsOn: string | null }
 export interface Supervisor extends Person { bacbId: string | null }
-export interface Trainee extends Person { fieldworkType: FieldworkType | null }
+export interface Trainee extends Person { fieldworkType: FieldworkType | null; credential: Credential | null; rulesEdition: Edition | null }
 export interface Verification { id: string; traineeId: string; supervisorId: string; month: string; rulesVersion: string; traineeSignedAt: string | null; supervisorSignedAt: string | null }
 
 export class ApiError extends Error {
@@ -32,6 +33,10 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   if (!res.ok) throw new ApiError(res.status, data.error ?? res.statusText);
   return data as T;
 }
+
+/** The rules standard for a trainee record (null if incomplete). */
+export const profileOf = (u: { fieldworkType: FieldworkType | null; credential: Credential | null; rulesEdition: Edition | null }): Profile | null =>
+  u.fieldworkType && u.credential && u.rulesEdition ? { type: u.fieldworkType, credential: u.credential, edition: u.rulesEdition } : null;
 
 export const homeFor = (role: Me['role']) => (role === 'supervisor' ? '/supervise' : '/app');
 

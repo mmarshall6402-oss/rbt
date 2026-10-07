@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { durationMinutes, evaluateMonth, findOverlaps, validateEntry, type FieldworkType } from '@fieldtrack/rules';
-import { api, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { durationMinutes, evaluateMonth, findOverlaps, validateEntry, type Profile } from '@fieldtrack/rules';
+import { api, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
-import { AppShell, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
+import { AppShell, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
 type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
@@ -16,11 +16,11 @@ const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
 
 export function TraineeDashboard({ me }: { me: Me }) {
   const [month, setMonth] = useMonthParam();
-  const type = me.fieldworkType as FieldworkType;
+  const profile = profileOf(me)!; // trainees always have a standard (enforced by the database)
   const supervisors = useSupervisors(), entries = useEntries(month), progress = useProgress(), verifications = useVerifications(month);
   const locked = new Set(verifications.data?.filter(v => v.supervisorSignedAt).map(v => v.supervisorId));
   // Computed on the device with the same rules the server uses: updates instantly, works offline.
-  const result = { data: entries.data ? evaluateMonth(month, entries.data, type) : undefined, error: entries.error };
+  const result = { data: entries.data ? evaluateMonth(month, entries.data, profile) : undefined, error: entries.error };
   const [editing, setEditing] = useState<EntryDto | null>(null);
 
   return (
@@ -36,19 +36,20 @@ export function TraineeDashboard({ me }: { me: Me }) {
               label="Unrestricted (60%)" sub="Across counted months" ok={progress.data.countableMinutes ? progress.data.unrestrictedOk : undefined} />
           </>
         )}
-        {result.data && <MonthRings m={result.data} type={type} />}
+        {result.data && <MonthRings m={result.data} profile={profile} />}
       </section>
 
       <div className="cols">
         <section className="card">
           <h2>{editing ? 'Edit entry' : 'Log hours'}</h2>
           {supervisors.data && supervisors.data.length > 0
-            ? <EntryForm key={editing?.id ?? `new-${month}`} month={month} type={type} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} onDone={() => setEditing(null)} />
+            ? <EntryForm key={editing?.id ?? `new-${month}`} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} onDone={() => setEditing(null)} />
             : <p className="muted">Link a supervisor to start logging.</p>}
         </section>
         <div className="stack">
           <section className="card">
             <h2>{monthLabel(month)} requirements</h2>
+            <p className="muted small">{standardLabel(profile)}</p>
             {result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}
           </section>
           {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} />}
@@ -64,6 +65,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
 
       <div className="cols">
         <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} /></section>
+        <StandardSettings me={me} />
         <section className="card">
           <h2>Supervisors</h2>
           <ul className="people">{supervisors.data?.map(s => <li key={s.id}><strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span></li>)}</ul>
@@ -99,7 +101,7 @@ function LinkSupervisor({ first = false }: { first?: boolean }) {
   );
 }
 
-function EntryForm({ month, type, supervisors, entries, editing, onDone }: { month: string; type: FieldworkType; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; onDone: () => void }) {
+function EntryForm({ month, profile, supervisors, entries, editing, onDone }: { month: string; profile: Profile; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; onDone: () => void }) {
   const [d, setD] = useState<Draft>(() => editing ? { ...editing, restrictedHours: String(editing.restrictedMinutes / 60) } : blank(supervisors[0]?.id, month === currentMonth() ? today() : `${month}-01`));
   const [warnings, setWarnings] = useState<string[]>([]);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD(p => ({ ...p, [k]: v }));
@@ -110,7 +112,7 @@ function EntryForm({ month, type, supervisors, entries, editing, onDone }: { mon
   const ready = d.startTime && d.endTime;
   const problems = ready ? validateEntry(input) : [];
   const preview = ready && !problems.length && input.workDate.startsWith(month)
-    ? evaluateMonth(month, [...entries.filter(e => e.id !== editing?.id), input], type).summary : null;
+    ? evaluateMonth(month, [...entries.filter(e => e.id !== editing?.id), input], profile).summary : null;
 
   async function save() {
     const id = editing?.id ?? crypto.randomUUID(); // client-generated id makes uploads idempotent
@@ -266,6 +268,40 @@ function MonthChanges({ month }: { month: string }) {
       <h2>What changed in {monthLabel(month)}</h2>
       {!list.length ? <p className="muted">No changes yet.</p> : <ul className="history">{list.slice(0, 15).map(c => <ChangeLine key={c.auditId} c={c} />)}</ul>}
       <p className="muted small">Every add, edit and delete is recorded permanently and can't be altered.</p>
+    </section>
+  );
+}
+
+/** Which BACB standard the trainee is held to. Signed months always keep the rules they were signed under. */
+function StandardSettings({ me }: { me: Me }) {
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (patch: Partial<Pick<Me, 'credential' | 'fieldworkType' | 'rulesEdition'>>) => api<Me>('/me', 'PATCH', patch),
+    onSuccess: user => { qc.setQueryData(['me'], user); void qc.invalidateQueries({ queryKey: ['progress'] }) },
+  });
+  return (
+    <section className="card stack">
+      <h2>Your standard</h2>
+      <label>When will you apply for certification?
+        <select value={me.rulesEdition ?? '2027'} onChange={e => save.mutate({ rulesEdition: e.target.value as Me['rulesEdition'] })}>
+          <option value="2022">Before January 1, 2027 (2022 rules)</option>
+          <option value="2027">On or after January 1, 2027 (2027 rules)</option>
+        </select>
+      </label>
+      <div className="row">
+        <label>Credential
+          <select value={me.credential ?? 'bcba'} onChange={e => save.mutate({ credential: e.target.value as Me['credential'] })}>
+            <option value="bcba">BCBA</option><option value="bcaba">BCaBA</option>
+          </select>
+        </label>
+        <label>Fieldwork type
+          <select value={me.fieldworkType ?? 'concentrated'} onChange={e => save.mutate({ fieldworkType: e.target.value as Me['fieldworkType'] })}>
+            <option value="concentrated">Concentrated</option><option value="supervised">Supervised</option>
+          </select>
+        </label>
+      </div>
+      <p className="muted small">The BACB applies rules by your application date, not by when you worked. Months already signed keep the rules they were signed under.</p>
+      <ErrorText error={save.error} />
     </section>
   );
 }

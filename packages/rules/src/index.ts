@@ -15,47 +15,79 @@ export interface Entry {
   contact: ContactType | null; // supervised entries only
 }
 
+export type Credential = 'bcba' | 'bcaba';
+/** Which BACB standard applies. Decided by when the trainee submits their application (not when hours were worked):
+ *  before 2027-01-01 → '2022', on/after → '2027'. */
+export type Edition = '2022' | '2027';
+export interface Profile { type: FieldworkType; credential?: Credential; edition?: Edition }
+
+type ByCredential<T> = Record<Credential, Record<FieldworkType, T>>;
 export interface RuleSet {
   version: string;
-  effectiveFrom: string; // YYYY-MM-DD; applies to months starting on/after this date
+  edition: Edition;
   minMonthlyMinutes: number;
   maxMonthlyMinutes: number;
-  overCapPolicy: 'fail' | 'cap'; // UNVERIFIED: does a >130h month fail, or count up to the cap?
-  contactCounting: 'perEntry' | 'perDay'; // UNVERIFIED: how BACB counts multiple contacts in one day
-  supervisionPercent: Record<FieldworkType, number>;
-  minContacts: Record<FieldworkType, number>;
-  minObservations: number;
+  overCapPolicy: 'fail' | 'cap'; // 'cap': hours over the max don't count; 'fail': the whole month doesn't count
+  contactCounting: 'perEntry' | 'perDay'; // UNVERIFIED for 2022: how BACB counts multiple contacts in one day
+  supervisionPerMille: ByCredential<number>; // 75 = 7.5% (per-mille keeps the math in integers)
+  minContacts: Record<FieldworkType, number> | null; // null = not required
+  observation: { unit: 'count'; min: number } | { unit: 'minutes'; min: Record<FieldworkType, number> };
   maxGroupPercent: number; // of supervised minutes
   minUnrestrictedPercent: number; // of all countable minutes
-  requiredMinutes: Record<FieldworkType, number>;
+  requiredMinutes: ByCredential<number>;
 }
 
-export const RULESETS: readonly RuleSet[] = [
-  {
-    version: 'bacb-2022-01',
-    effectiveFrom: '2022-01-01',
-    minMonthlyMinutes: 20 * 60,
-    maxMonthlyMinutes: 130 * 60,
-    overCapPolicy: 'fail',
+const h = (hours: number) => hours * 60;
+export const RULESETS: Readonly<Record<Edition, RuleSet>> = {
+  '2022': {
+    version: 'bacb-2022',
+    edition: '2022',
+    minMonthlyMinutes: h(20),
+    maxMonthlyMinutes: h(130),
+    overCapPolicy: 'fail', // UNVERIFIED: strict default until confirmed against the 2022 handbook
     contactCounting: 'perEntry',
-    supervisionPercent: { supervised: 5, concentrated: 10 },
+    supervisionPerMille: { bcba: { supervised: 50, concentrated: 100 }, bcaba: { supervised: 50, concentrated: 100 } },
     minContacts: { supervised: 4, concentrated: 6 },
-    minObservations: 1,
+    observation: { unit: 'count', min: 1 },
     maxGroupPercent: 50,
     minUnrestrictedPercent: 60,
-    requiredMinutes: { supervised: 2000 * 60, concentrated: 1500 * 60 },
+    requiredMinutes: { bcba: { supervised: h(2000), concentrated: h(1500) }, bcaba: { supervised: h(1300), concentrated: h(1000) } },
   },
-];
+  '2027': {
+    version: 'bacb-2027',
+    edition: '2027',
+    minMonthlyMinutes: h(20),
+    maxMonthlyMinutes: h(160),
+    overCapPolicy: 'cap', // 2027: hours above 160 are simply not countable
+    contactCounting: 'perEntry',
+    supervisionPerMille: { bcba: { supervised: 50, concentrated: 75 }, bcaba: { supervised: 50, concentrated: 100 } },
+    minContacts: null, // supervisory contacts are no longer required
+    observation: { unit: 'minutes', min: { supervised: 60, concentrated: 90 } },
+    maxGroupPercent: 50,
+    minUnrestrictedPercent: 60,
+    requiredMinutes: { bcba: { supervised: h(2000), concentrated: h(1500) }, bcaba: { supervised: h(1300), concentrated: h(800) } },
+  },
+};
+
+/** Edition for an application submitted on `applicationDate` (YYYY-MM-DD). */
+export const editionFor = (applicationDate: string): Edition => (applicationDate < '2027-01-01' ? '2022' : '2027');
+
+/** Resolved targets for one trainee, for displays and checks. */
+export function targetsFor(profile: Profile, rules: RuleSet = RULESETS[profile.edition ?? '2027']) {
+  const credential = profile.credential ?? 'bcba';
+  return {
+    rules, credential,
+    supervisionPerMille: rules.supervisionPerMille[credential][profile.type],
+    minContacts: rules.minContacts?.[profile.type] ?? null,
+    observation: rules.observation.unit === 'count'
+      ? { unit: 'count' as const, min: rules.observation.min }
+      : { unit: 'minutes' as const, min: rules.observation.min[profile.type] },
+    requiredMinutes: rules.requiredMinutes[credential][profile.type],
+  };
+}
 
 const DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
-export function ruleSetFor(month: string, sets: readonly RuleSet[] = RULESETS): RuleSet {
-  const start = `${month}-01`;
-  const rs = sets.filter(r => r.effectiveFrom <= start).sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom)).at(-1);
-  if (!rs) throw new RangeError(`No BACB rule set in effect for ${month}`);
-  return rs;
-}
 
 export function toMinutes(time: string): number {
   const m = TIME.exec(time);
@@ -89,11 +121,12 @@ export interface MonthSummary {
   restrictedMinutes: number;
   unrestrictedMinutes: number;
   contacts: number;
-  observations: number;
+  observations: number; // count (2022)
+  observationMinutes: number; // duration (2027)
 }
 
 export function summarize(entries: readonly Entry[], rules: RuleSet): MonthSummary {
-  const s: MonthSummary = { totalMinutes: 0, independentMinutes: 0, supervisedMinutes: 0, groupMinutes: 0, restrictedMinutes: 0, unrestrictedMinutes: 0, contacts: 0, observations: 0 };
+  const s: MonthSummary = { totalMinutes: 0, independentMinutes: 0, supervisedMinutes: 0, groupMinutes: 0, restrictedMinutes: 0, unrestrictedMinutes: 0, contacts: 0, observations: 0, observationMinutes: 0 };
   const contactKeys = new Set<string>(), obsKeys = new Set<string>();
   entries.forEach((e, i) => {
     const d = durationMinutes(e);
@@ -104,7 +137,7 @@ export function summarize(entries: readonly Entry[], rules: RuleSet): MonthSumma
     if (e.isGroup) s.groupMinutes += d;
     const key = rules.contactCounting === 'perDay' ? e.workDate : String(i);
     if (e.contact) contactKeys.add(key);
-    if (e.contact === 'observation') obsKeys.add(key);
+    if (e.contact === 'observation') { obsKeys.add(key); s.observationMinutes += d }
   });
   s.unrestrictedMinutes = s.totalMinutes - s.restrictedMinutes;
   s.contacts = contactKeys.size;
@@ -115,10 +148,12 @@ export function summarize(entries: readonly Entry[], rules: RuleSet): MonthSumma
 export type CheckId = 'minHours' | 'maxHours' | 'supervision' | 'groupShare' | 'contacts' | 'observations';
 export interface Check { id: CheckId; ok: boolean; label: string; needed?: number } // needed: minutes or count to fix
 
-/** Extra supervised minutes needed so supervised/total reaches pct (supervised time also grows the total). */
-export function supervisedMinutesNeeded(totalMinutes: number, supervisedMinutes: number, pct: number): number {
-  return Math.max(0, Math.ceil((pct * totalMinutes - 100 * supervisedMinutes) / (100 - pct)));
+/** Extra supervised minutes needed so supervised/total reaches perMille (supervised time also grows the total). */
+export function supervisedMinutesNeeded(totalMinutes: number, supervisedMinutes: number, perMille: number): number {
+  return Math.max(0, Math.ceil((perMille * totalMinutes - 1000 * supervisedMinutes) / (1000 - perMille)));
 }
+
+const percentLabel = (perMille: number) => `${perMille / 10}%`;
 
 export interface MonthResult {
   month: string;
@@ -129,21 +164,26 @@ export interface MonthResult {
   countableMinutes: number;
 }
 
-export function evaluateMonth(month: string, entries: readonly Entry[], type: FieldworkType, sets: readonly RuleSet[] = RULESETS): MonthResult {
+export function evaluateMonth(month: string, entries: readonly Entry[], profile: Profile, rules?: RuleSet): MonthResult {
   const stray = entries.find(e => !e.workDate.startsWith(`${month}-`));
   if (stray) throw new RangeError(`Entry dated ${stray.workDate} is outside ${month}`);
-  const r = ruleSetFor(month, sets), s = summarize(entries, r);
-  const pct = r.supervisionPercent[type], contacts = r.minContacts[type];
-  const supNeeded = s.totalMinutes ? supervisedMinutesNeeded(s.totalMinutes, s.supervisedMinutes, pct) : 0;
+  const t = targetsFor(profile, rules), r = t.rules, s = summarize(entries, r);
+  const supNeeded = s.totalMinutes ? supervisedMinutesNeeded(s.totalMinutes, s.supervisedMinutes, t.supervisionPerMille) : 0;
   const over = s.totalMinutes - r.maxMonthlyMinutes;
   const checks: Check[] = [
     { id: 'minHours', ok: s.totalMinutes >= r.minMonthlyMinutes, label: `Minimum ${r.minMonthlyMinutes / 60} hours`, needed: Math.max(0, r.minMonthlyMinutes - s.totalMinutes) },
-    { id: 'maxHours', ok: r.overCapPolicy === 'cap' || over <= 0, label: `Maximum ${r.maxMonthlyMinutes / 60} hours`, needed: Math.max(0, over) },
-    { id: 'supervision', ok: s.totalMinutes > 0 && supNeeded === 0, label: `Minimum ${pct}% supervision`, needed: supNeeded },
+    {
+      id: 'maxHours', ok: r.overCapPolicy === 'cap' || over <= 0, needed: Math.max(0, over),
+      label: r.overCapPolicy === 'cap' ? `Hours over ${r.maxMonthlyMinutes / 60} don't count` : `Maximum ${r.maxMonthlyMinutes / 60} hours`,
+    },
+    { id: 'supervision', ok: s.totalMinutes > 0 && supNeeded === 0, label: `Minimum ${percentLabel(t.supervisionPerMille)} supervision`, needed: supNeeded },
     { id: 'groupShare', ok: s.groupMinutes * 100 <= r.maxGroupPercent * s.supervisedMinutes, label: `Maximum ${r.maxGroupPercent}% group supervision`, needed: Math.max(0, s.groupMinutes - Math.floor(r.maxGroupPercent * s.supervisedMinutes / 100)) },
-    { id: 'contacts', ok: s.contacts >= contacts, label: `Minimum ${contacts} supervisor contacts`, needed: Math.max(0, contacts - s.contacts) },
-    { id: 'observations', ok: s.observations >= r.minObservations, label: `Minimum ${r.minObservations} observation with client`, needed: Math.max(0, r.minObservations - s.observations) },
   ];
+  if (t.minContacts !== null)
+    checks.push({ id: 'contacts', ok: s.contacts >= t.minContacts, label: `Minimum ${t.minContacts} supervisor contacts`, needed: Math.max(0, t.minContacts - s.contacts) });
+  checks.push(t.observation.unit === 'count'
+    ? { id: 'observations', ok: s.observations >= t.observation.min, label: `Minimum ${t.observation.min} observation with client`, needed: Math.max(0, t.observation.min - s.observations) }
+    : { id: 'observations', ok: s.observationMinutes >= t.observation.min, label: `Minimum ${t.observation.min} minutes observed with client`, needed: Math.max(0, t.observation.min - s.observationMinutes) });
   const passed = checks.every(c => c.ok);
   return { month, rulesVersion: r.version, summary: s, checks, passed, countableMinutes: passed ? Math.min(s.totalMinutes, r.maxMonthlyMinutes) : 0 };
 }
@@ -157,23 +197,23 @@ export interface ProgramResult {
   complete: boolean;
 }
 
-export function evaluateProgram(entries: readonly Entry[], type: FieldworkType, sets: readonly RuleSet[] = RULESETS, today = new Date().toISOString().slice(0, 10)): ProgramResult {
+export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet): ProgramResult {
   const byMonth = new Map<string, Entry[]>();
   for (const e of entries) {
     const m = e.workDate.slice(0, 7);
     byMonth.set(m, [...(byMonth.get(m) ?? []), e]);
   }
-  const months = [...byMonth].sort(([a], [b]) => a.localeCompare(b)).map(([m, list]) => evaluateMonth(m, list, type, sets));
+  const months = [...byMonth].sort(([a], [b]) => a.localeCompare(b)).map(([m, list]) => evaluateMonth(m, list, profile, rules));
+  const t = targetsFor(profile, rules);
   const passing = months.filter(m => m.passed);
   const countableMinutes = passing.reduce((n, m) => n + m.countableMinutes, 0);
   const total = passing.reduce((n, m) => n + m.summary.totalMinutes, 0);
   const unres = passing.reduce((n, m) => n + m.summary.unrestrictedMinutes, 0);
-  const r = ruleSetFor((months.at(-1)?.month ?? today.slice(0, 7)), sets);
-  const unrestrictedOk = unres * 100 >= r.minUnrestrictedPercent * total;
+  const unrestrictedOk = unres * 100 >= t.rules.minUnrestrictedPercent * total;
   return {
-    months, countableMinutes, requiredMinutes: r.requiredMinutes[type],
+    months, countableMinutes, requiredMinutes: t.requiredMinutes,
     unrestrictedPercent: total ? (unres / total) * 100 : 0, unrestrictedOk,
-    complete: countableMinutes >= r.requiredMinutes[type] && unrestrictedOk,
+    complete: countableMinutes >= t.requiredMinutes && unrestrictedOk,
   };
 }
 

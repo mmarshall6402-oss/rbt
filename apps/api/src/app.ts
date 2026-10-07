@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry } from '@fieldtrack/rules';
+import { durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import type { DB, User } from './db.js';
@@ -29,8 +29,16 @@ const EntryBody = z.object({
   format: z.enum(['in_person', 'online']).nullable().default(null),
   description: z.string().max(5000).default(''),
 });
+const FieldworkTypeEnum = z.enum(['supervised', 'concentrated']);
+const CredentialEnum = z.enum(['bcba', 'bcaba']);
+const EditionEnum = z.enum(['2022', '2027']);
+const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum }).partial()
+  .refine(b => Object.keys(b).length > 0, 'Nothing to update');
 const SignupBody = z.discriminatedUnion('role', [
-  z.object({ role: z.literal('trainee'), fullName: Name, fieldworkType: z.enum(['supervised', 'concentrated']), bacbId: z.string().trim().max(50).optional() }),
+  z.object({
+    role: z.literal('trainee'), fullName: Name, fieldworkType: FieldworkTypeEnum, bacbId: z.string().trim().max(50).optional(),
+    credential: CredentialEnum.default('bcba'), rulesEdition: EditionEnum.default('2027'),
+  }),
   z.object({ role: z.literal('supervisor'), fullName: Name, bacbId: z.string().trim().min(1, 'BACB certification number is required').max(50) }),
 ]);
 const TraineeQuery = z.object({ traineeId: z.uuid().optional() });
@@ -149,15 +157,16 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     return { organizationId: link.organizationId, warnings };
   }
 
-  async function traineeFieldwork(trx: Trx, traineeId: string) {
-    const t = await trx.selectFrom('users').select('fieldworkType').where('id', '=', traineeId).executeTakeFirstOrThrow();
-    if (!t.fieldworkType) throw new HttpError(400, 'Trainee has no fieldwork type set');
-    return t.fieldworkType;
+  /** The standard a trainee is held to: fieldwork type, credential, and 2022 vs 2027 rules. */
+  async function traineeProfile(trx: Trx, traineeId: string): Promise<Profile> {
+    const t = await trx.selectFrom('users').select(['fieldworkType', 'credential', 'rulesEdition']).where('id', '=', traineeId).executeTakeFirstOrThrow();
+    if (!t.fieldworkType || !t.credential || !t.rulesEdition) throw new HttpError(400, 'Trainee has no fieldwork standard set');
+    return { type: t.fieldworkType, credential: t.credential, edition: t.rulesEdition };
   }
 
   /** Month result for one trainee–supervisor pair: what both people sign. */
   async function pairResult(trx: Trx, traineeId: string, supervisorId: string, month: string) {
-    return evaluateMonth(month, await listEntries(trx, { traineeId, supervisorId }, ...monthRange(month)), await traineeFieldwork(trx, traineeId));
+    return evaluateMonth(month, await listEntries(trx, { traineeId, supervisorId }, ...monthRange(month)), await traineeProfile(trx, traineeId));
   }
 
   const auditRows = (trx: Trx) => trx.selectFrom('auditLog as a').leftJoin('users as u', 'u.id', 'a.actorId')
@@ -177,6 +186,8 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
         return trx.insertInto('users').values({
           cognitoSub: id.sub, email: id.email, fullName: body.fullName, role: body.role, bacbId: body.bacbId || null,
           fieldworkType: body.role === 'trainee' ? body.fieldworkType : null,
+          credential: body.role === 'trainee' ? body.credential : null,
+          rulesEdition: body.role === 'trainee' ? body.rulesEdition : null,
           inviteCode: body.role === 'supervisor' ? newInviteCode() : null,
         }).returningAll().executeTakeFirstOrThrow();
       });
@@ -184,6 +195,13 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     });
 
     api.get('/me', req => asUser(req, async (_, user) => publicUser(user)));
+
+    // Trainees choose their standard (e.g. switch to 2027 rules if their application date moves). Signed months keep their rules.
+    api.patch('/me', req => asUser(req, async (trx, user) => {
+      requireRole(user, 'trainee');
+      const changes = ProfileBody.parse(req.body);
+      return publicUser(await trx.updateTable('users').set(changes).where('id', '=', user.id).returningAll().executeTakeFirstOrThrow());
+    }));
 
     // ---- Supervision links ----
     api.post('/supervisions', async (req, reply) => {
@@ -208,7 +226,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     api.get('/trainees', req => asUser(req, async (trx, user) => {
       requireRole(user, 'supervisor');
       return trx.selectFrom('supervisions as s').innerJoin('users as u', 'u.id', 's.traineeId')
-        .select(['u.id', 'u.fullName', 'u.email', 'u.fieldworkType', 's.startsOn', 's.endsOn']).where('s.supervisorId', '=', user.id).orderBy('u.fullName').execute();
+        .select(['u.id', 'u.fullName', 'u.email', 'u.fieldworkType', 'u.credential', 'u.rulesEdition', 's.startsOn', 's.endsOn']).where('s.supervisorId', '=', user.id).orderBy('u.fullName').execute();
     }));
 
     // ---- Entries ----
@@ -275,12 +293,12 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     api.get('/months/:month', req => asUser(req, async (trx, user) => {
       const { month } = z.object({ month: Month }).parse(req.params);
       const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
-      return evaluateMonth(month, await listEntries(trx, s, ...monthRange(month)), await traineeFieldwork(trx, s.traineeId));
+      return evaluateMonth(month, await listEntries(trx, s, ...monthRange(month)), await traineeProfile(trx, s.traineeId));
     }));
 
     api.get('/progress', req => asUser(req, async (trx, user) => {
       const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
-      return evaluateProgram(await listEntries(trx, s), await traineeFieldwork(trx, s.traineeId));
+      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId));
     }));
 
     // ---- Monthly sign-off: trainee signs, then supervisor signs (which locks the month) ----
@@ -305,7 +323,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
 
       if (user.role === 'trainee') {
         return trx.insertInto('monthVerifications')
-          .values({ traineeId, supervisorId, month: `${month}-01`, fieldworkType: await traineeFieldwork(trx, traineeId), rulesVersion: result.rulesVersion, summary: JSON.stringify(result), traineeSignedAt: new Date(), supervisorSignedAt: null, pdfS3Key: null })
+          .values({ traineeId, supervisorId, month: `${month}-01`, fieldworkType: (await traineeProfile(trx, traineeId)).type, rulesVersion: result.rulesVersion, summary: JSON.stringify(result), traineeSignedAt: new Date(), supervisorSignedAt: null, pdfS3Key: null })
           .onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doUpdateSet(eb => ({ summary: eb.ref('excluded.summary'), rulesVersion: eb.ref('excluded.rulesVersion'), traineeSignedAt: eb.ref('excluded.traineeSignedAt') })))
           .returning(['id', 'month', 'traineeSignedAt', 'supervisorSignedAt']).executeTakeFirstOrThrow();
       }

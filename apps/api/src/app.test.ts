@@ -18,6 +18,7 @@ const as = (sub: string) => {
     get: (u: string) => app.inject({ method: 'GET', url: `/api${u}`, headers }),
     post: (u: string, payload: object = {}) => app.inject({ method: 'POST', url: `/api${u}`, payload, headers }),
     put: (u: string, payload: object) => app.inject({ method: 'PUT', url: `/api${u}`, payload, headers }),
+    patch: (u: string, payload: object) => app.inject({ method: 'PATCH', url: `/api${u}`, payload, headers }),
     del: (u: string) => app.inject({ method: 'DELETE', url: `/api${u}`, headers }),
     /** Logs an entry under a fresh client-generated id (or the given one). */
     log: (o: object = {}, id: string = randomUUID()) => app.inject({ method: 'PUT', url: `/api/entries/${id}`, payload: entry(o), headers }),
@@ -47,8 +48,8 @@ describe.skipIf(!url)('API', () => {
       truncate users, supervisions, entries, month_verifications, audit_log, organizations restart identity cascade;
       set session_replication_role = origin;`).execute(db);
     const users = await db.insertInto('users').values([
-      { cognitoSub: 'trainee', email: 't@x', fullName: 'Trainee', role: 'trainee', fieldworkType: 'concentrated' },
-      { cognitoSub: 'other', email: 'o@x', fullName: 'Other', role: 'trainee', fieldworkType: 'supervised' },
+      { cognitoSub: 'trainee', email: 't@x', fullName: 'Trainee', role: 'trainee', fieldworkType: 'concentrated', credential: 'bcba', rulesEdition: '2022' },
+      { cognitoSub: 'other', email: 'o@x', fullName: 'Other', role: 'trainee', fieldworkType: 'supervised', credential: 'bcba', rulesEdition: '2022' },
       { cognitoSub: 'sup', email: 's@x', fullName: 'Sup', role: 'supervisor', inviteCode: 'SUPCODE1' },
       { cognitoSub: 'sup2', email: 's2@x', fullName: 'Sup2', role: 'supervisor', inviteCode: 'SUPCODE2' },
     ]).returning(['id', 'cognitoSub']).execute();
@@ -229,7 +230,7 @@ describe.skipIf(!url)('API', () => {
     it('creates a trainee', async () => {
       const res = await as('new@x').post('/signup', { role: 'trainee', fullName: 'New', fieldworkType: 'supervised' });
       expect(res.statusCode).toBe(201);
-      expect(res.json()).toMatchObject({ email: 'new@x', role: 'trainee', fieldworkType: 'supervised', inviteCode: null });
+      expect(res.json()).toMatchObject({ email: 'new@x', role: 'trainee', fieldworkType: 'supervised', credential: 'bcba', rulesEdition: '2027', inviteCode: null });
       expect((await as('new@x').get('/me')).statusCode).toBe(200);
       expect((await as('new@x').post('/signup', { role: 'trainee', fullName: 'New', fieldworkType: 'supervised' })).statusCode).toBe(409);
     });
@@ -237,10 +238,45 @@ describe.skipIf(!url)('API', () => {
       expect((await as('bcba@x').post('/signup', { role: 'supervisor', fullName: 'B' })).statusCode).toBe(400);
       const res = await as('bcba@x').post('/signup', { role: 'supervisor', fullName: 'B', bacbId: '1-23-45678' });
       expect(res.json().inviteCode).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
+      expect(res.json()).toMatchObject({ credential: null, rulesEdition: null });
     });
     it('rejects self-assigned admin and missing auth', async () => {
       expect((await as('x@x').post('/signup', { role: 'admin', fullName: 'X' })).statusCode).toBe(400);
       expect((await app.inject({ method: 'POST', url: '/api/signup', payload: {} })).statusCode).toBe(401);
+    });
+  });
+
+  describe('fieldwork standard (2022 vs 2027)', () => {
+    it('a trainee switches standards and the same month is re-evaluated under the new rules', async () => {
+      await trainee.log({ startTime: '00:00', endTime: '18:00' });
+      await trainee.log({ workDate: '2026-09-02', kind: 'supervised', contact: 'observation', format: 'online' });
+      const ids22 = (await trainee.get('/months/2026-09')).json().checks.map((c: { id: string }) => c.id);
+      expect(ids22).toContain('contacts');
+      const res = await trainee.patch('/me', { rulesEdition: '2027', credential: 'bcaba' });
+      expect(res.json()).toMatchObject({ rulesEdition: '2027', credential: 'bcaba' });
+      const month = (await trainee.get('/months/2026-09')).json();
+      expect(month.rulesVersion).toBe('bacb-2027');
+      expect(month.checks.map((c: { id: string }) => c.id)).not.toContain('contacts');
+      expect(month.checks.find((c: { id: string }) => c.id === 'observations')).toMatchObject({ ok: true }); // 120 observed minutes >= 90
+      expect((await trainee.get('/progress')).json().requiredMinutes).toBe(800 * 60); // BCaBA concentrated, 2027
+    });
+    it('only accepts valid standards and never lets a user change their role', async () => {
+      expect((await trainee.patch('/me', { rulesEdition: '2030' })).statusCode).toBe(400);
+      expect((await trainee.patch('/me', {})).statusCode).toBe(400);
+      expect((await trainee.patch('/me', { role: 'supervisor' })).statusCode).toBe(400); // unknown keys are stripped → nothing to update
+      expect((await trainee.get('/me')).json().role).toBe('trainee');
+      expect((await sup.patch('/me', { rulesEdition: '2027' })).statusCode).toBe(403);
+    });
+    it('signed months keep the rules they were signed under', async () => {
+      await trainee.log();
+      const signed = (await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup })).json();
+      expect(signed.traineeSignedAt).toBeTruthy();
+      await trainee.patch('/me', { rulesEdition: '2027' });
+      const v = await db.selectFrom('monthVerifications').select('rulesVersion').executeTakeFirstOrThrow();
+      expect(v.rulesVersion).toBe('bacb-2022');
+    });
+    it('the database rejects a trainee without a standard', async () => {
+      await expect(db.insertInto('users').values({ cognitoSub: 'x', email: 'x@x', fullName: 'X', role: 'trainee', fieldworkType: 'concentrated', credential: null, rulesEdition: null }).execute()).rejects.toThrow(/users_trainee_standard/);
     });
   });
 

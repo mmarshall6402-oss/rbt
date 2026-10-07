@@ -25,14 +25,23 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   await page.locator('.highlight').getByRole('button', { name: 'Add supervisor' }).click();
   await expect(page.getByRole('heading', { name: 'Log hours' })).toBeVisible();
 
-  // A compliant concentrated month: 18 h independent + 6 supervised contacts incl. one observation
+  // A compliant concentrated month under the 2027 rules (the default): 18 h independent, 90 observed minutes, 7.5%+ supervision
   await page.getByLabel('Previous month').click();
   await logEntry(page, '2026-09-01', '08:00', '17:00');
   await logEntry(page, '2026-09-02', '08:00', '17:00');
-  await logEntry(page, '2026-09-03', '09:00', '10:00', 'Supervised', 'observation');
+  await logEntry(page, '2026-09-03', '09:00', '10:30', 'Supervised', 'observation');
   for (const d of ['04', '05', '06', '07', '08']) await logEntry(page, `2026-09-${d}`, '09:00', '09:30', 'Supervised', 'contact');
   await expect(page.locator('.sync')).toHaveText('✓ Synced');
   await expect(page.locator('.checklist li.no')).toHaveCount(0);
+  await expect(page.getByText('BCBA · Concentrated · 2027 rules')).toBeVisible();
+  await expect(page.locator('.ring', { hasText: 'Contacts' })).toHaveCount(0); // not required under 2027
+
+  // Switching to the 2022 standard re-checks the same month: contacts and the 10% target come back
+  await page.getByLabel('When will you apply for certification?').selectOption('2022');
+  await expect(page.locator('.ring', { hasText: 'Contacts' })).toHaveCount(1);
+  await expect(page.locator('.ring', { hasText: 'Supervision (10%)' })).toHaveCount(1);
+  await page.getByLabel('When will you apply for certification?').selectOption('2027');
+  await expect(page.locator('.ring', { hasText: 'Supervision (7.5%)' })).toHaveCount(1);
 
   await page.getByRole('button', { name: /Sign Sep/ }).click();
   await expect(page.getByText('waiting on supervisor')).toBeVisible();

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { formatHours, ruleSetFor, type FieldworkType, type MonthResult } from '@fieldtrack/rules';
+import { formatHours, targetsFor, type MonthResult, type Profile } from '@fieldtrack/rules';
 import { signOut } from '../auth';
 import { wipeDevice } from '../query';
 import { dismissRejected, flush, pendingOps, useSyncState } from '../sync';
@@ -41,23 +41,38 @@ export function Ring({ value, max, display, label, sub, ok }: { value: number; m
   );
 }
 
-const neededText = (id: string, n: number) =>
-  id === 'supervision' && n === 0 ? 'No hours logged yet' : ['contacts', 'observations'].includes(id) ? `${n} more needed` : id === 'maxHours' || id === 'groupShare' ? `${hrs(n)} h over` : `${hrs(n)} h still needed`;
+const neededText = (id: string, n: number, observationInMinutes = false) =>
+  id === 'supervision' && n === 0 ? 'No hours logged yet'
+  : id === 'observations' && observationInMinutes ? `${n} more minutes needed`
+  : ['contacts', 'observations'].includes(id) ? `${n} more needed`
+  : id === 'maxHours' || id === 'groupShare' ? `${hrs(n)} h over` : `${hrs(n)} h still needed`;
 
-/** The four monthly rings + checklist, shared by trainee and supervisor views. */
-export function MonthRings({ m, type }: { m: MonthResult; type: FieldworkType }) {
+/** Monthly rings for the trainee's standard (2022: contacts + one observation; 2027: observation minutes). */
+export function MonthRings({ m, profile }: { m: MonthResult; profile: Profile }) {
   const by = Object.fromEntries(m.checks.map(c => [c.id, c]));
-  const s = m.summary, pct = s.totalMinutes ? (s.supervisedMinutes / s.totalMinutes) * 100 : 0;
-  const rules = ruleSetFor(m.month), target = rules.supervisionPercent[type], minContacts = rules.minContacts[type];
+  const t = targetsFor(profile), s = m.summary;
+  const pct = s.totalMinutes ? (s.supervisedMinutes / s.totalMinutes) * 100 : 0, target = t.supervisionPerMille / 10;
+  const maxH = t.rules.maxMonthlyMinutes / 60, obsMinutes = t.observation.unit === 'minutes';
   return (
     <>
-      <Ring value={s.totalMinutes} max={20 * 60} display={hrs(s.totalMinutes)} label="Hours this month" sub={by.minHours!.ok ? (by.maxHours!.ok ? '20–130 h range' : neededText('maxHours', by.maxHours!.needed!)) : neededText('minHours', by.minHours!.needed!)} ok={by.minHours!.ok && by.maxHours!.ok} />
+      <Ring value={s.totalMinutes} max={20 * 60} display={hrs(s.totalMinutes)} label="Hours this month"
+        sub={!by.minHours!.ok ? neededText('minHours', by.minHours!.needed!) : !by.maxHours!.ok ? neededText('maxHours', by.maxHours!.needed!)
+          : by.maxHours!.needed ? `${hrs(by.maxHours!.needed)} h over ${maxH} won't count` : `20–${maxH} h range`}
+        ok={by.minHours!.ok && by.maxHours!.ok} />
       <Ring value={pct} max={target} display={`${pct.toFixed(1)}%`} label={`Supervision (${target}%)`} sub={by.supervision!.ok ? `${hrs(s.supervisedMinutes)} h supervised` : neededText('supervision', by.supervision!.needed!)} ok={by.supervision!.ok} />
-      <Ring value={s.contacts} max={minContacts} display={`${s.contacts}/${minContacts}`} label="Contacts" sub={by.contacts!.ok ? 'Requirement met' : neededText('contacts', by.contacts!.needed!)} ok={by.contacts!.ok} />
-      <Ring value={s.observations} max={1} display={`${s.observations}`} label="Client observation" sub={by.observations!.ok ? 'Requirement met' : '1 needed'} ok={by.observations!.ok} />
+      {t.minContacts !== null && by.contacts && (
+        <Ring value={s.contacts} max={t.minContacts} display={`${s.contacts}/${t.minContacts}`} label="Contacts" sub={by.contacts.ok ? 'Requirement met' : neededText('contacts', by.contacts.needed!)} ok={by.contacts.ok} />
+      )}
+      {obsMinutes
+        ? <Ring value={s.observationMinutes} max={t.observation.min} display={`${s.observationMinutes}/${t.observation.min}`} label="Minutes observed" sub={by.observations!.ok ? 'Requirement met' : neededText('observations', by.observations!.needed!, true)} ok={by.observations!.ok} />
+        : <Ring value={s.observations} max={t.observation.min} display={`${s.observations}`} label="Client observation" sub={by.observations!.ok ? 'Requirement met' : '1 needed'} ok={by.observations!.ok} />}
     </>
   );
 }
+
+/** Short description of a trainee's standard, e.g. "BCBA · Concentrated · 2027 rules". */
+export const standardLabel = (p: Profile) =>
+  `${(p.credential ?? 'bcba').toUpperCase()} · ${p.type === 'concentrated' ? 'Concentrated' : 'Supervised'} · ${p.edition ?? '2027'} rules`;
 
 export function Checklist({ m }: { m: MonthResult }) {
   return (
@@ -65,7 +80,7 @@ export function Checklist({ m }: { m: MonthResult }) {
       {m.checks.map(c => (
         <li key={c.id} className={c.ok ? 'ok' : 'no'}>
           <span aria-hidden>{c.ok ? '✓' : '✗'}</span> {c.label}
-          {!c.ok && c.needed !== undefined && <small>{neededText(c.id, c.needed)}</small>}
+          {!c.ok && c.needed !== undefined && <small>{neededText(c.id, c.needed, c.label.includes('minutes'))}</small>}
         </li>
       ))}
     </ul>

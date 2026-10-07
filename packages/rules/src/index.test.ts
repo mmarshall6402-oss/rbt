@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, formatHours, ruleSetFor, supervisedMinutesNeeded, validateEntry, type Entry, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateMonth, evaluateProgram, findOverlaps, formatHours, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type Profile, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
 const sup = (workDate: string, startTime: string, endTime: string, o: Partial<Entry> = {}): Entry =>
   ({ workDate, startTime, endTime, kind: 'supervised', restrictedMinutes: 0, isGroup: false, contact: 'contact', ...o });
 const check = (r: ReturnType<typeof evaluateMonth>, id: string) => r.checks.find(c => c.id === id)!;
-const withRules = (o: Partial<RuleSet>): RuleSet[] => [{ ...RULESETS[0]!, ...o }];
+const withRules = (o: Partial<RuleSet>): RuleSet => ({ ...RULESETS['2022'], ...o });
+const C22: Profile = { type: 'concentrated', edition: '2022' }, S22: Profile = { type: 'supervised', edition: '2022' };
+const C27: Profile = { type: 'concentrated', edition: '2027' }, S27: Profile = { type: 'supervised', edition: '2027' };
 
 // A month that passes every concentrated requirement: 18h independent + 6 x 20min supervised (one observation) = 20h, 10%
 const passingMonth = (m = '2026-09'): Entry[] => [
@@ -36,90 +38,132 @@ describe('validateEntry', () => {
 
 describe('evaluateMonth', () => {
   it('passes a fully compliant concentrated month', () => {
-    const r = evaluateMonth('2026-09', passingMonth(), 'concentrated');
+    const r = evaluateMonth('2026-09', passingMonth(), C22);
     expect(r.passed).toBe(true);
     expect(r.countableMinutes).toBe(1200);
-    expect(r.rulesVersion).toBe('bacb-2022-01');
+    expect(r.rulesVersion).toBe('bacb-2022');
   });
 
   it('fails concentrated at 9.9% supervision and says exactly how much is missing', () => {
     // 1000 total, 99 supervised = 9.9%
     const entries = [ind('2026-09-01', '00:00', '15:01'), sup('2026-09-02', '08:00', '09:39')];
-    const r = evaluateMonth('2026-09', entries, 'concentrated');
+    const r = evaluateMonth('2026-09', entries, C22);
     expect(check(r, 'supervision')).toMatchObject({ ok: false, needed: 2 }); // (101/1002 ≥ 10%)
   });
 
   it('passes at exactly 10% (no float error)', () => {
     const entries = [ind('2026-09-01', '00:00', '15:00'), sup('2026-09-02', '08:00', '09:40')];
-    expect(check(evaluateMonth('2026-09', entries, 'concentrated'), 'supervision').ok).toBe(true);
+    expect(check(evaluateMonth('2026-09', entries, C22), 'supervision').ok).toBe(true);
   });
 
   it('applies 5% for supervised fieldwork', () => {
     const entries = [ind('2026-09-01', '00:00', '19:00'), sup('2026-09-02', '08:00', '09:00')]; // 60/1200 = 5%
-    expect(check(evaluateMonth('2026-09', entries, 'supervised'), 'supervision').ok).toBe(true);
-    expect(check(evaluateMonth('2026-09', entries, 'concentrated'), 'supervision').ok).toBe(false);
+    expect(check(evaluateMonth('2026-09', entries, S22), 'supervision').ok).toBe(true);
+    expect(check(evaluateMonth('2026-09', entries, C22), 'supervision').ok).toBe(false);
   });
 
   it('fails supervision on an empty month', () =>
-    expect(check(evaluateMonth('2026-09', [], 'concentrated'), 'supervision').ok).toBe(false));
+    expect(check(evaluateMonth('2026-09', [], C22), 'supervision').ok).toBe(false));
 
   it('caps group supervision at 50% of supervised time', () => {
     const half = [sup('2026-09-01', '08:00', '09:00'), sup('2026-09-02', '08:00', '09:00', { isGroup: true })];
-    expect(check(evaluateMonth('2026-09', half, 'concentrated'), 'groupShare').ok).toBe(true);
+    expect(check(evaluateMonth('2026-09', half, C22), 'groupShare').ok).toBe(true);
     const over = [...half, sup('2026-09-03', '08:00', '08:01', { isGroup: true })];
-    expect(check(evaluateMonth('2026-09', over, 'concentrated'), 'groupShare')).toMatchObject({ ok: false, needed: 1 });
+    expect(check(evaluateMonth('2026-09', over, C22), 'groupShare')).toMatchObject({ ok: false, needed: 1 });
   });
 
   it('requires 6 contacts concentrated, 4 supervised', () => {
     const four = [3, 4, 5, 6].map(d => sup(`2026-09-0${d}`, '09:00', '10:00'));
-    expect(check(evaluateMonth('2026-09', four, 'concentrated'), 'contacts')).toMatchObject({ ok: false, needed: 2 });
-    expect(check(evaluateMonth('2026-09', four, 'supervised'), 'contacts').ok).toBe(true);
+    expect(check(evaluateMonth('2026-09', four, C22), 'contacts')).toMatchObject({ ok: false, needed: 2 });
+    expect(check(evaluateMonth('2026-09', four, S22), 'contacts').ok).toBe(true);
   });
 
   it('counts contacts per day when configured', () => {
     const sameDay = [sup('2026-09-01', '09:00', '10:00'), sup('2026-09-01', '11:00', '12:00')];
-    expect(evaluateMonth('2026-09', sameDay, 'concentrated').summary.contacts).toBe(2);
-    expect(evaluateMonth('2026-09', sameDay, 'concentrated', withRules({ contactCounting: 'perDay' })).summary.contacts).toBe(1);
+    expect(evaluateMonth('2026-09', sameDay, C22).summary.contacts).toBe(2);
+    expect(evaluateMonth('2026-09', sameDay, C22, withRules({ contactCounting: 'perDay' })).summary.contacts).toBe(1);
   });
 
   it('requires an observation', () => {
     const noObs = passingMonth().map(e => (e.contact === 'observation' ? { ...e, contact: 'contact' as const } : e));
-    expect(check(evaluateMonth('2026-09', noObs, 'concentrated'), 'observations').ok).toBe(false);
+    expect(check(evaluateMonth('2026-09', noObs, C22), 'observations').ok).toBe(false);
   });
 
   it('fails under 20 hours', () =>
-    expect(check(evaluateMonth('2026-09', passingMonth().slice(1), 'concentrated'), 'minHours')).toMatchObject({ ok: false, needed: 540 }));
+    expect(check(evaluateMonth('2026-09', passingMonth().slice(1), C22), 'minHours')).toMatchObject({ ok: false, needed: 540 }));
 
   describe('over 130 hours', () => {
     const big = (m = '2026-09') => [...passingMonth(m), ...[10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map(d => ind(`${m}-${d}`, '08:00', '17:00')),
       ...[24, 25].map(d => sup(`${m}-${d}`, '08:00', '17:00'))]; // 20 + 126 + 18 = 164h, 12.2% supervised
     it('fails the month under the default (strict) policy', () => {
-      const r = evaluateMonth('2026-09', big(), 'concentrated');
+      const r = evaluateMonth('2026-09', big(), C22);
       expect(r.passed).toBe(false);
       expect(r.countableMinutes).toBe(0);
     });
     it('counts up to the cap under the "cap" policy', () =>
-      expect(evaluateMonth('2026-09', big(), 'concentrated', withRules({ overCapPolicy: 'cap' })).countableMinutes).toBe(7800));
+      expect(evaluateMonth('2026-09', big(), C22, withRules({ overCapPolicy: 'cap' })).countableMinutes).toBe(7800));
   });
 
   it('rejects entries from another month', () =>
-    expect(() => evaluateMonth('2026-09', [ind('2026-10-01', '08:00', '09:00')], 'concentrated')).toThrow(/outside/));
+    expect(() => evaluateMonth('2026-09', [ind('2026-10-01', '08:00', '09:00')], C22)).toThrow(/outside/));
 });
 
-describe('rule versioning', () => {
-  const sets = [...RULESETS, { ...RULESETS[0]!, version: 'future', effectiveFrom: '2027-01-01', minMonthlyMinutes: 30 * 60 }];
-  it('picks the rule set in effect for the month', () => {
-    expect(ruleSetFor('2026-12', sets).version).toBe('bacb-2022-01');
-    expect(ruleSetFor('2027-01', sets).version).toBe('future');
+describe('2027 standard', () => {
+  // 18.5 h independent + 90 min supervised observation = 20 h, exactly 7.5% supervised
+  const month27 = (m = '2027-02'): Entry[] => [ind(`${m}-01`, '08:00', '17:00'), ind(`${m}-02`, '08:00', '17:30'), sup(`${m}-03`, '09:00', '10:30', { contact: 'observation' })];
+
+  it('passes a compliant concentrated month with no supervisor contacts required', () => {
+    const r = evaluateMonth('2027-02', month27(), C27);
+    expect(r.passed).toBe(true);
+    expect(r.rulesVersion).toBe('bacb-2027');
+    expect(r.checks.map(c => c.id)).not.toContain('contacts');
   });
-  it('old months keep old rules after a change', () =>
-    expect(evaluateMonth('2026-09', passingMonth(), 'concentrated', sets).passed).toBe(true));
-  it('throws before any rule set exists', () => expect(() => ruleSetFor('2021-12')).toThrow());
+
+  it('uses 7.5% for concentrated BCBA, exactly (per-mille math, no float error)', () => {
+    const exact = [ind('2027-02-01', '00:00', '15:25'), sup('2027-02-02', '08:00', '09:15')]; // 75 / 1000
+    expect(check(evaluateMonth('2027-02', exact, C27), 'supervision')).toMatchObject({ ok: true, label: 'Minimum 7.5% supervision' });
+    const short = [ind('2027-02-01', '00:00', '15:26'), sup('2027-02-02', '08:00', '09:14')]; // 74 / 1000
+    expect(check(evaluateMonth('2027-02', short, C27), 'supervision')).toMatchObject({ ok: false, needed: 2 }); // 76 / 1002 >= 7.5%
+  });
+
+  it('measures observation in minutes: 90 concentrated, 60 supervised', () => {
+    const obs = (min: number) => [ind('2027-02-01', '00:00', '20:00'), sup('2027-02-02', '09:00', `${String(9 + Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`, { contact: 'observation' })];
+    expect(check(evaluateMonth('2027-02', obs(89), C27), 'observations')).toMatchObject({ ok: false, needed: 1, label: 'Minimum 90 minutes observed with client' });
+    expect(check(evaluateMonth('2027-02', obs(90), C27), 'observations').ok).toBe(true);
+    expect(check(evaluateMonth('2027-02', obs(60), S27), 'observations').ok).toBe(true);
+    expect(evaluateMonth('2027-02', obs(75), C27).summary.observationMinutes).toBe(75);
+  });
+
+  it('caps at 160 hours: the month still counts, hours above the cap do not', () => {
+    const big = [...month27(), ...Array.from({ length: 16 }, (_, i) => ind(`2027-02-${String(i + 10).padStart(2, '0')}`, '08:00', '17:00')),
+      ...[26, 27].map(d => sup(`2027-02-${d}`, '06:00', '20:00'))]; // 20 + 144 + 28 = 192 h, 15.4% supervised
+    const r = evaluateMonth('2027-02', big, C27);
+    expect(r.passed).toBe(true);
+    expect(r.countableMinutes).toBe(160 * 60);
+    expect(check(r, 'maxHours').label).toBe("Hours over 160 don't count");
+  });
+
+  it('applies BCaBA hours and supervision', () => {
+    expect(targetsFor({ type: 'concentrated', credential: 'bcaba', edition: '2027' })).toMatchObject({ supervisionPerMille: 100, requiredMinutes: 800 * 60 });
+    expect(targetsFor({ type: 'concentrated', credential: 'bcaba', edition: '2022' }).requiredMinutes).toBe(1000 * 60);
+    expect(targetsFor({ type: 'supervised', credential: 'bcaba', edition: '2027' }).requiredMinutes).toBe(1300 * 60);
+    expect(targetsFor(C27)).toMatchObject({ supervisionPerMille: 75, requiredMinutes: 1500 * 60, minContacts: null });
+  });
+
+  it('picks the edition by application date, not by when hours were worked', () => {
+    expect(editionFor('2026-12-31')).toBe('2022');
+    expect(editionFor('2027-01-01')).toBe('2027');
+    // Same 2026 month evaluates differently depending on the trainee's standard
+    expect(evaluateMonth('2026-09', passingMonth(), C22).passed).toBe(true);
+    expect(evaluateMonth('2026-09', passingMonth(), C27).passed).toBe(false); // 20 observed minutes < 90
+  });
+
+  it('defaults to the 2027 standard and BCBA', () => expect(targetsFor({ type: 'concentrated' })).toMatchObject({ credential: 'bcba', supervisionPerMille: 75 }));
 });
 
 describe('evaluateProgram', () => {
   it('counts only passing months', () => {
-    const r = evaluateProgram([...passingMonth('2026-08'), ...passingMonth('2026-09').slice(1)], 'concentrated');
+    const r = evaluateProgram([...passingMonth('2026-08'), ...passingMonth('2026-09').slice(1)], C22);
     expect(r.months.map(m => m.passed)).toEqual([true, false]);
     expect(r.countableMinutes).toBe(1200);
     expect(r.requiredMinutes).toBe(1500 * 60);
@@ -127,7 +171,7 @@ describe('evaluateProgram', () => {
   });
   it('flags unrestricted below 60%', () => {
     const heavyRestricted = passingMonth().map(e => (e.kind === 'independent' ? { ...e, restrictedMinutes: 540 } : e));
-    const r = evaluateProgram(heavyRestricted, 'concentrated');
+    const r = evaluateProgram(heavyRestricted, C22);
     expect(r.unrestrictedPercent).toBeCloseTo(10);
     expect(r.unrestrictedOk).toBe(false);
   });
@@ -135,8 +179,9 @@ describe('evaluateProgram', () => {
 
 describe('helpers', () => {
   it('computes supervised minutes needed exactly', () => {
-    expect(supervisedMinutesNeeded(1080, 0, 10)).toBe(120); // 18h indep → 2h sup → 2/20 = 10%
-    expect(supervisedMinutesNeeded(1200, 200, 10)).toBe(0);
+    expect(supervisedMinutesNeeded(1080, 0, 100)).toBe(120); // 18h indep → 2h sup → 2/20 = 10%
+    expect(supervisedMinutesNeeded(1200, 200, 100)).toBe(0);
+    expect(supervisedMinutesNeeded(1000, 74, 75)).toBe(2); // 7.5%
   });
   it('finds overlapping entries on the same day only', () => {
     const a = ind('2026-09-01', '08:00', '12:00'), b = ind('2026-09-01', '11:00', '13:00'), c = ind('2026-09-01', '12:00', '13:00'), d = ind('2026-09-02', '08:00', '12:00');

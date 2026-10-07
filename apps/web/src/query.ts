@@ -36,6 +36,17 @@ onConfirmed(c => {
 // After the outbox drains (or the server rejects a change), refetch server truth.
 onServerChange(() => void queryClient.invalidateQueries());
 
+export const persistOptions = {
+  persister,
+  maxAge: 7 * 24 * 3600_000,
+  buster: 'v1',
+  dehydrateOptions: {
+    // Keep any query that has data, even if its latest refresh failed (e.g. the connection dropped right
+    // after a sync). The default keeps only successful queries, so an offline reload lost the account.
+    shouldDehydrateQuery: (q: { state: { data: unknown } }) => q.state.data !== undefined,
+  },
+};
+
 /** Removes everything this app stored on the device (cache and unsent changes). */
 export async function wipeDevice() {
   queryClient.clear();
