@@ -418,6 +418,42 @@ describe.skipIf(!url)('API', () => {
     });
   });
 
+  describe('Final Fieldwork Verification', () => {
+    const signMonth = async (month: string) => {
+      await trainee.post(`/verifications/${month}/sign`, { supervisorId: ids.sup, signature: 'Trainee', attest: true });
+      return sup.post(`/verifications/${month}/sign`, { traineeId: ids.trainee, signature: 'Sup', attest: true });
+    };
+    const finalForm = async (res: Awaited<ReturnType<typeof trainee.get>>) => {
+      expect(res.statusCode).toBe(200);
+      const f = (await PDFDocument.load(res.rawPayload)).getForm();
+      return (name: string) => (f.getFields().length ? f.getTextField(name).getText() ?? '' : null);
+    };
+
+    it('totals the signed monthly forms; the supervisor signs; a newly signed month voids the signature', async () => {
+      expect((await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`)).statusCode).toBe(409); // nothing signed yet
+      await trainee.log({ workDate: '2026-08-03', endTime: '11:00' });
+      await trainee.log({ workDate: '2026-09-01' });
+      await signMonth('2026-08');
+      const get = await finalForm(await trainee.get(`/final/form.pdf?supervisorId=${ids.sup}`));
+      expect(['START_DATE', 'END_DATE', 'INDEPENDENT_HOURS 2', 'TOTAL_MONTHS_OF_FIELDWORK_OBTAINED 2', 'INDEPENDENT_HOURS'].map(get)).toEqual(['08/2026', '08/2026', '3.00', '1', '']); // concentrated column only
+
+      expect((await trainee.post('/final/sign', { traineeId: ids.trainee, signature: 'Trainee', attest: true })).statusCode).toBe(403);
+      expect((await sup.post('/final/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).statusCode).toBe(200);
+      expect((await finalForm(await trainee.get(`/final/form.pdf?supervisorId=${ids.sup}`)))('TRAINEE_NAME')).toBeNull(); // signed copy is locked
+      expect((await trainee.get('/final')).json()).toHaveLength(1);
+
+      await signMonth('2026-09');
+      const after = await finalForm(await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`));
+      expect([after('END_DATE'), after('INDEPENDENT_HOURS 2'), after('SUPERVISOR_SIGNATURE_DATE')]).toEqual(['09/2026', '5.00', '']); // needs re-signing
+    });
+
+    it('only the linked supervisor can sign, with their own name', async () => {
+      expect((await sup2.post('/final/sign', { traineeId: ids.other, signature: 'Sup2', attest: true })).statusCode).toBe(404);
+      expect((await sup.post('/final/sign', { traineeId: ids.trainee, signature: 'Trainee', attest: true })).json().error).toMatch(/full name/);
+      expect((await other.get(`/final/form.pdf?supervisorId=${ids.sup}`)).statusCode).toBe(404);
+    });
+  });
+
   describe('BACB monthly verification form (PDF)', () => {
     const form = async (res: Awaited<ReturnType<typeof trainee.get>>) => {
       expect(res.statusCode).toBe(200);

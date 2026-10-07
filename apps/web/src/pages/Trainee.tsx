@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
-import { api, download, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { api, download, profileOf, useFinals, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
@@ -21,7 +21,7 @@ const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
 export function TraineeDashboard({ me }: { me: Me }) {
   const [month, setMonth] = useMonthParam();
   const profile = profileOf(me)!; // trainees always have a standard (enforced by the database)
-  const supervisors = useSupervisors(), entries = useEntries(month), progress = useProgress(), verifications = useVerifications(month);
+  const supervisors = useSupervisors(), entries = useEntries(month), progress = useProgress(), verifications = useVerifications(month), finals = useFinals();
   const locked = new Set(verifications.data?.filter(v => v.supervisorSignedAt).map(v => v.supervisorId));
   // Computed on the device with the same rules the server uses: updates instantly, works offline.
   // BACB checks each verification form (month × supervisor) on its own, so each supervisor gets separate results.
@@ -88,7 +88,13 @@ export function TraineeDashboard({ me }: { me: Me }) {
         <StandardSettings me={me} />
         <section className="card">
           <h2>Supervisors</h2>
-          <ul className="people">{supervisors.data?.map(s => <li key={s.id}><strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span></li>)}</ul>
+          <ul className="people">{supervisors.data?.map(s => (
+            <li key={s.id}>
+              <strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span>
+              {finals.data?.some(f => f.supervisorId === s.id) && <span className="ok small">✓ Final form signed</span>}
+              <button className="ghost small" onClick={() => void download(`/final/form.pdf?supervisorId=${s.id}`, `BACB final fieldwork verification ${s.fullName}.pdf`).catch(e => alert(e.message))}>Final form (PDF)</button>
+            </li>
+          ))}</ul>
           <LinkSupervisor />
         </section>
       </div>
@@ -250,7 +256,7 @@ function SignOff({ month, supervisors, me, edition, withHours }: { month: string
                 : <button className="small" disabled={month > currentMonth() || sign.isPending || pending > 0} onClick={() => setSigning(s.id)}>Sign {monthLabel(month, true)}</button>}
               {!v?.supervisorSignedAt && withHours.has(s.id) && <Deadline month={month} />}
               <button className="ghost small" disabled={pdf.isPending || pending > 0} onClick={() => pdf.mutate(s)}>BACB form (PDF)</button>
-              {signing === s.id && <SignForm edition={edition} name={me.fullName} cta={`Sign ${monthLabel(month, true)} for ${s.fullName}`} busy={sign.isPending || pending > 0} onSign={sign.mutate} onCancel={() => setSigning(null)} />}
+              {signing === s.id && <SignForm statements={ATTESTATIONS[edition].statements} name={me.fullName} cta={`Sign ${monthLabel(month, true)} for ${s.fullName}`} busy={sign.isPending || pending > 0} onSign={sign.mutate} onCancel={() => setSigning(null)} />}
             </li>
           );
         })}

@@ -18,6 +18,7 @@ export interface EntryDto extends EntryInput { id: string; createdAt: string; up
 export interface Person { id: string; fullName: string; email: string; startsOn: string; endsOn: string | null }
 export interface Supervisor extends Person { bacbId: string | null }
 export interface Trainee extends Person { fieldworkType: FieldworkType | null; credential: Credential | null; rulesEdition: Edition | null }
+export interface FinalVerification { id: string; traineeId: string; supervisorId: string; supervisorSignedAt: string }
 export interface Verification { id: string; traineeId: string; supervisorId: string; month: string; rulesVersion: string; traineeSignedAt: string | null; supervisorSignedAt: string | null }
 
 export class ApiError extends Error {
@@ -75,5 +76,6 @@ export const useProgress = (traineeId?: string) =>
   useQuery({ queryKey: ['progress', traineeId], queryFn: () => api<ProgramResult>(`/progress?${q(traineeId).slice(1)}`) });
 export const useVerifications = (month: string, traineeId?: string) =>
   useQuery({ queryKey: ['verifications', month, traineeId], queryFn: () => api<Verification[]>(`/verifications?month=${month}${q(traineeId)}`) });
+export const useFinals = (traineeId?: string) => useQuery({ queryKey: ['final', traineeId], queryFn: () => api<FinalVerification[]>(`/final?${q(traineeId).slice(1)}`) });
 export const useSupervisors = () => useQuery({ queryKey: ['supervisors'], queryFn: () => api<Supervisor[]>('/supervisors') });
 export const useTrainees = () => useQuery({ queryKey: ['trainees'], queryFn: () => api<Trainee[]>('/trainees') });

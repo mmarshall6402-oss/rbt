@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
-import { fillMonthlyForm } from './forms.js';
+import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
 import { hoursLogPdf } from './hourslog.js';
 import type { DB, User } from './db.js';
 
@@ -178,6 +178,28 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
   /** Month result for one trainee–supervisor pair: what both people sign. */
   async function pairResult(trx: Trx, traineeId: string, supervisorId: string, month: string) {
     return evaluateMonth(month, await listEntries(trx, { traineeId, supervisorId }, ...monthRange(month)), await traineeProfile(trx, traineeId));
+  }
+
+  /** What a Final Fieldwork Verification Form reports for a pair: totals from their signed (locked) monthly forms, by fieldwork type. */
+  async function finalSummary(trx: Trx, traineeId: string, supervisorId: string) {
+    const months = await trx.selectFrom('monthVerifications').select(['month', 'fieldworkType', 'summary'])
+      .where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('supervisorSignedAt', 'is not', null).orderBy('month').execute();
+    if (!months.length) throw new HttpError(409, 'No signed monthly forms with this supervisor yet');
+    const totals: Record<FieldworkType, TypeTotals | null> = { supervised: null, concentrated: null };
+    for (const m of months) {
+      const s = (m.summary as { summary: { independentMinutes: number; supervisedMinutes: number } }).summary;
+      const t = (totals[m.fieldworkType] ??= { independentMinutes: 0, supervisedMinutes: 0, months: 0 });
+      t.independentMinutes += s.independentMinutes; t.supervisedMinutes += s.supervisedMinutes; t.months++;
+    }
+    return { edition: (await traineeProfile(trx, traineeId)).edition!, startMonth: months[0]!.month.slice(0, 7), endMonth: months.at(-1)!.month.slice(0, 7), totals };
+  }
+
+  /** Resolves the trainee–supervisor pair from the caller's role; 404 unless they're linked. */
+  async function pairFor(trx: Trx, user: User, q: { traineeId?: string | undefined; supervisorId?: string | undefined }) {
+    const traineeId = user.role === 'trainee' ? user.id : q.traineeId, supervisorId = user.role === 'supervisor' ? user.id : q.supervisorId;
+    if (!traineeId || !supervisorId || user.role === 'admin') throw new HttpError(400, user.role === 'trainee' ? 'supervisorId is required' : 'traineeId is required');
+    if (!await trx.selectFrom('supervisions').select('id').where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).executeTakeFirst()) throw new HttpError(404, 'Not found');
+    return { traineeId, supervisorId };
   }
 
   const auditRows = (trx: Trx) => trx.selectFrom('auditLog as a').leftJoin('users as u', 'u.id', 'a.actorId')
@@ -369,11 +391,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       }).parse(req.body ?? {});
       // Electronic signature: typing your own name after reading the attestation shows intent to sign.
       if (!signatureMatches(body.signature, user.fullName)) throw new HttpError(400, `Type your full name exactly as on your account (${user.fullName}) to sign`);
-      const traineeId = user.role === 'trainee' ? user.id : body.traineeId;
-      const supervisorId = user.role === 'supervisor' ? user.id : body.supervisorId;
-      if (!traineeId || !supervisorId || user.role === 'admin') throw new HttpError(400, user.role === 'trainee' ? 'supervisorId is required' : 'traineeId is required');
-      const link = await trx.selectFrom('supervisions').select('id').where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).executeTakeFirst();
-      if (!link) throw new HttpError(404, 'Not found');
+      const { traineeId, supervisorId } = await pairFor(trx, user, body);
       const existing = await trx.selectFrom('monthVerifications').selectAll().where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('month', '=', `${month}-01`).executeTakeFirst();
       if (existing?.supervisorSignedAt) throw new HttpError(409, 'This month is already signed and locked');
       const result = await pairResult(trx, traineeId, supervisorId, month);
@@ -395,9 +413,7 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       const { month } = z.object({ month: Month }).parse(req.params);
       const q = z.object({ traineeId: z.uuid().optional(), supervisorId: z.uuid().optional() }).parse(req.query);
       const pdf = await asUser(req, async (trx, user) => {
-        const traineeId = user.role === 'trainee' ? user.id : q.traineeId, supervisorId = user.role === 'supervisor' ? user.id : q.supervisorId;
-        if (!traineeId || !supervisorId || user.role === 'admin') throw new HttpError(400, user.role === 'trainee' ? 'supervisorId is required' : 'traineeId is required');
-        if (!await trx.selectFrom('supervisions').select('id').where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).executeTakeFirst()) throw new HttpError(404, 'Not found');
+        const { traineeId, supervisorId } = await pairFor(trx, user, q);
         const people = await trx.selectFrom('users').selectAll().where('id', 'in', [traineeId, supervisorId]).execute();
         const t = people.find(p => p.id === traineeId)!, s = people.find(p => p.id === supervisorId)!;
         const v = await trx.selectFrom('monthVerifications').selectAll().where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('month', '=', `${month}-01`).executeTakeFirst();
@@ -416,6 +432,48 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       });
       return reply.type('application/pdf').header('cache-control', 'no-store')
         .header('content-disposition', `attachment; filename="fieldwork-verification-${month}.pdf"`).send(Buffer.from(pdf));
+    });
+
+    // ---- Final Fieldwork Verification (supervisor signs once fieldwork with them ends) ----
+    const PairQuery = z.object({ traineeId: z.uuid().optional(), supervisorId: z.uuid().optional() });
+
+    api.get('/final', req => asUser(req, async (trx, user) => {
+      const { traineeId } = TraineeQuery.parse(req.query);
+      return trx.selectFrom('finalVerifications').select(['id', 'traineeId', 'supervisorId', 'summary', 'supervisorSignedAt'])
+        .$if(user.role === 'supervisor', q => q.where('supervisorId', '=', user.id).$if(!!traineeId, q2 => q2.where('traineeId', '=', traineeId!)))
+        .$if(user.role !== 'supervisor', q => q.where('traineeId', '=', user.id)).execute();
+    }));
+
+    api.post('/final/sign', req => asUser(req, async (trx, user) => {
+      requireRole(user, 'supervisor');
+      const body = z.object({ traineeId: z.uuid(), signature: z.string().max(200), attest: z.literal(true, 'You must agree to the attestation to sign') }).parse(req.body ?? {});
+      if (!signatureMatches(body.signature, user.fullName)) throw new HttpError(400, `Type your full name exactly as on your account (${user.fullName}) to sign`);
+      const { traineeId, supervisorId } = await pairFor(trx, user, body);
+      const summary = await finalSummary(trx, traineeId, supervisorId);
+      const values = { summary: JSON.stringify(summary), attestation: FINAL_ATTESTATIONS[summary.edition].id, supervisorSignature: body.signature.trim(), supervisorSignedAt: new Date() };
+      return trx.insertInto('finalVerifications').values({ traineeId, supervisorId, ...values })
+        .onConflict(oc => oc.columns(['traineeId', 'supervisorId']).doUpdateSet(values))
+        .returning(['id', 'supervisorSignedAt']).executeTakeFirstOrThrow();
+    }));
+
+    api.get('/final/form.pdf', async (req, reply) => {
+      const pdf = await asUser(req, async (trx, user) => {
+        const { traineeId, supervisorId } = await pairFor(trx, user, PairQuery.parse(req.query));
+        const [summary, people, signed] = await Promise.all([
+          finalSummary(trx, traineeId, supervisorId),
+          trx.selectFrom('users').selectAll().where('id', 'in', [traineeId, supervisorId]).execute(),
+          trx.selectFrom('finalVerifications').selectAll().where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).executeTakeFirst(),
+        ]);
+        const t = people.find(p => p.id === traineeId)!, s = people.find(p => p.id === supervisorId)!;
+        // The signature stands only while it covers exactly the signed months (none signed since).
+        const valid = signed && canonical(signed.summary) === canonical(summary);
+        return fillFinalForm({
+          ...summary, trainee: { name: t.fullName, bacbId: t.bacbId }, supervisor: { name: s.fullName, bacbId: s.bacbId },
+          state: t.fieldworkState, country: t.fieldworkCountry,
+          supervisorSigned: valid ? { name: signed.supervisorSignature, at: signed.supervisorSignedAt } : null, reference: valid ? signed.id : 'unsigned draft',
+        });
+      });
+      return reply.type('application/pdf').header('cache-control', 'no-store').header('content-disposition', 'attachment; filename="final-fieldwork-verification.pdf"').send(Buffer.from(pdf));
     });
   }, { prefix: '/api' });
 

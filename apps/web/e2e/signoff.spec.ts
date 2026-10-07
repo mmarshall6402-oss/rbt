@@ -70,6 +70,17 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   const [file] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'BACB form (PDF)' }).click()]);
   expect(file.suggestedFilename()).toBe('BACB monthly form 2026-09 Lorinda Otto.pdf');
   expect((await readFile(await file.path())).subarray(0, 5).toString()).toBe('%PDF-');
+
+  // End of fieldwork: the supervisor signs the final form, totalled from the signed month
+  await supPage.getByRole('button', { name: 'Sign final form…' }).click();
+  await expect(supPage.getByText('I am the supervisor designated in the signed supervision contract')).toBeVisible();
+  await supPage.getByLabel('Type your full name to sign electronically').fill('Lorinda Otto');
+  await supPage.getByRole('button', { name: 'Sign final form', exact: true }).click();
+  await expect(supPage.getByText(/✓ Signed .*Signing more months afterward/)).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('✓ Final form signed')).toBeVisible();
+  const [final] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Final form (PDF)' }).click()]);
+  expect(final.suggestedFilename()).toBe('BACB final fieldwork verification Lorinda Otto.pdf');
 });
 
 test('supervisor only sees hours logged under them', async ({ page }) => {

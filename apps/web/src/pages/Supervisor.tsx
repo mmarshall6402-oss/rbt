@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
-import { api, download, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
+import { api, download, profileOf, useEntries, useFinals, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
 import { AppShell, Checklist, Deadline, ReminderToggle, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
+import { ATTESTATIONS, FINAL_ATTESTATIONS, type Edition } from '@fieldtrack/rules';
 import { EntriesTable } from './Trainee';
 
 const signStatus = (v?: Verification) =>
@@ -83,7 +84,7 @@ export function TraineeReview({ me }: { me: Me }) {
     mutationFn: (signature: string) => api(`/verifications/${month}/sign`, 'POST', { traineeId, signature, attest: true }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['verifications'] }),
   });
-  const v = sig.data?.[0];
+  const v = sig.data?.[0], edition = (trainee && profileOf(trainee)?.edition) || '2027';
   const pdf = useMutation({ mutationFn: () => download(`/verifications/${month}/form.pdf?traineeId=${traineeId}`, `BACB monthly form ${month} ${trainee?.fullName ?? ''}.pdf`) });
 
   return (
@@ -103,7 +104,7 @@ export function TraineeReview({ me }: { me: Me }) {
             <>
               {result.data && !result.data.passed && <p className="notice">⚠ This month doesn't meet every requirement. Signed months still won't count toward the total.</p>}
               {signing
-                ? <SignForm edition={trainee && profileOf(trainee)?.edition || '2027'} name={me.fullName} cta="Sign & lock month" busy={sign.isPending} onSign={sign.mutate} onCancel={() => setSigning(false)} />
+                ? <SignForm statements={ATTESTATIONS[edition].statements} name={me.fullName} cta="Sign & lock month" busy={sign.isPending} onSign={sign.mutate} onCancel={() => setSigning(false)} />
                 : <button className="primary" onClick={() => setSigning(true)}>Sign {monthLabel(month)}…</button>}
               <p className="muted small">Signing locks the month: the trainee can't change these entries afterward.</p>
             </>
@@ -114,7 +115,33 @@ export function TraineeReview({ me }: { me: Me }) {
         </section>
       </div>
 
+      <FinalVerificationCard traineeId={traineeId} me={me} edition={edition} />
+
       <section className="card"><div className="row spread"><h2>Entries</h2><span className="row">Export{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}?traineeId=${traineeId}`, `fieldwork-hours ${trainee?.fullName ?? ''}.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div><EntriesTable entries={entries.data ?? []} supervisors={[]} /></section>
     </AppShell>
+  );
+}
+
+/** End of fieldwork: the supervisor signs the BACB Final Fieldwork Verification Form, totalled from signed monthly forms. */
+function FinalVerificationCard({ traineeId, me, edition }: { traineeId: string; me: Me; edition: Edition }) {
+  const finals = useFinals(traineeId), qc = useQueryClient(), [signing, setSigning] = useState(false);
+  const signed = finals.data?.[0];
+  const sign = useMutation({
+    mutationFn: (signature: string) => api('/final/sign', 'POST', { traineeId, signature, attest: true }),
+    onSuccess: () => { setSigning(false); void qc.invalidateQueries({ queryKey: ['final'] }) },
+  });
+  const pdf = useMutation({ mutationFn: () => download(`/final/form.pdf?traineeId=${traineeId}`, 'BACB final fieldwork verification.pdf') });
+  return (
+    <section className="card stack">
+      <h2>Final fieldwork verification</h2>
+      <p className="muted small">When fieldwork under you ends, sign the BACB Final Fieldwork Verification Form. Totals come from the monthly forms you've both signed.</p>
+      {signed && <p className="ok small">✓ Signed {new Date(signed.supervisorSignedAt).toLocaleDateString()}. Signing more months afterward means signing this again.</p>}
+      <div className="row">
+        <button className="ghost small" disabled={pdf.isPending} onClick={() => pdf.mutate()}>Download final form (PDF)</button>
+        {!signing && <button className="small" onClick={() => setSigning(true)}>{signed ? 'Re-sign final form…' : 'Sign final form…'}</button>}
+      </div>
+      {signing && <SignForm statements={FINAL_ATTESTATIONS[edition].statements} name={me.fullName} cta="Sign final form" busy={sign.isPending} onSign={sign.mutate} onCancel={() => setSigning(false)} />}
+      <ErrorText error={sign.error ?? pdf.error} />
+    </section>
   );
 }

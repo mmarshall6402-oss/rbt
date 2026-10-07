@@ -300,3 +300,18 @@ export function planFor(program: ProgramResult, profile: Profile, current: strin
   const minutesPerMonth = Math.ceil(left / months), max = targetsFor(profile, rules).rules.maxMonthlyMinutes;
   return { months, minutesPerMonth, minutesPerWeek: Math.ceil((minutesPerMonth * 12) / 52), feasible: minutesPerMonth <= max, maxMonthlyMinutes: max };
 }
+
+/** Attestation on the Final Fieldwork Verification Form (signed by the supervisor; verbatim from the BACB forms). */
+export const FINAL_ATTESTATIONS: Readonly<Record<Edition, { id: string; statements: readonly string[] }>> = {
+  '2022': { id: 'bacb-ffvf-2022-v2023-12', statements: [
+    'Information presented on this Final Fieldwork Verification Form and the corresponding Monthly Fieldwork Verification Forms is true and correct to the best of my knowledge.',
+    'The trainee completed the fieldwork under my supervision in compliance with all relevant Fieldwork Requirements (BCBA/BCaBA) including, but not limited to; the minimum number of contacts per month, required amounts of unrestricted activities, required observations each month with clients, and adherence to the BACB’s ethics requirements.',
+    'I am the supervisor designated in the signed supervision contract with this trainee.',
+    'I completed the 8-hour supervision training prior to the onset of fieldwork.',
+  ] },
+  '2027': { id: 'bacb-ffvf-2027-v2026-06', statements: [
+    'Information presented on this Final Fieldwork Verification Form and the corresponding Monthly Fieldwork Verification Forms is true and correct to the best of my knowledge.',
+    'The trainee completed the fieldwork in compliance with all relevant fieldwork requirements, including adherence to the BACB’s ethics requirements.',
+    'I am the supervisor designated in the signed supervision contract with this trainee and have been qualified to supervise for the entirety of the fieldwork indicated on this Final Fieldwork Verification form.',
+  ] },
+};

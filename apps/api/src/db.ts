@@ -69,6 +69,16 @@ export interface DB {
     pdfS3Key: string | null;
     createdAt: Generated<Date>;
   };
+  finalVerifications: {
+    id: Generated<string>;
+    traineeId: string;
+    supervisorId: string;
+    summary: unknown;
+    attestation: string;
+    supervisorSignature: string;
+    supervisorSignedAt: Generated<Date>;
+    createdAt: Generated<Date>;
+  };
   remindersSent: {
     userId: string;
     kind: string;
