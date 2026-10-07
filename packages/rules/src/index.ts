@@ -269,3 +269,9 @@ export const signatureMatches = (typed: string, name: string) => {
   const norm = (s: string) => s.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
   return norm(typed) !== '' && norm(typed) === norm(name);
 };
+
+/** BACB: the Monthly Fieldwork Verification Form must be signed by the last day of the following month (YYYY-MM-DD). */
+export const signDeadline = (month: string) => {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  return new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
+};

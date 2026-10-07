@@ -44,6 +44,7 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   await page.getByLabel('When will you apply for certification?').selectOption('2027');
   await expect(page.locator('.ring', { hasText: 'Supervision (7.5%)' })).toHaveCount(1);
 
+  await expect(page.locator('.people').getByText(/Sign by|Due in|Past the BACB deadline/)).toBeVisible();
   await page.getByRole('button', { name: /^Sign Sep/ }).click();
   const sign = page.getByRole('button', { name: /for Lorinda Otto/ });
   await page.getByLabel('Type your full name to sign electronically').fill('Pat Traine');

@@ -24,7 +24,7 @@ a { color: inherit; }
 .muted { color: var(--muted); } .small { font-size: 13px; } .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .error { color: var(--ink); font-weight: 600; } .error::before { content: "✗ "; }
 .notice { background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
-.ok { font-weight: 600; } .no { font-weight: 600; color: var(--muted); }
+.ok { font-weight: 600; } .no { font-weight: 600; color: var(--muted); } .warn { font-weight: 600; }
 .center { min-height: 60vh; display: grid; place-items: center; padding: 16px; }
 
 /* Controls */

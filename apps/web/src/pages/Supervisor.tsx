@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, download, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
-import { AppShell, Checklist, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
+import { AppShell, Checklist, Deadline, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
 import { EntriesTable } from './Trainee';
 
 const signStatus = (v?: Verification) =>
@@ -47,7 +47,7 @@ export function SupervisorDashboard({ me }: { me: Me }) {
                       <td className="num">{s ? hrs(s.totalMinutes) : '…'}</td>
                       <td className="num">{s?.totalMinutes ? `${(s.supervisedMinutes / s.totalMinutes * 100).toFixed(1)}%` : '—'}</td>
                       <td>{m ? (m.passed ? <span className="ok">✓ All met</span> : <span className="no">✗ {failing} not met</span>) : '…'}</td>
-                      <td>{signStatus(sigs[i]?.data?.[0])}</td>
+                      <td>{signStatus(sigs[i]?.data?.[0])}{!sigs[i]?.data?.[0]?.supervisorSignedAt && !!s?.totalMinutes && <div><Deadline month={month} /></div>}</td>
                       <td><Link className="btn small" to={`/supervise/${t.id}?month=${month}`}>Review</Link></td>
                     </tr>
                   );

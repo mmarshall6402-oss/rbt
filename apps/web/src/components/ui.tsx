@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ATTESTATIONS, formatHours, signatureMatches, targetsFor, type Edition, type MonthResult, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, formatHours, signDeadline, signatureMatches, targetsFor, type Edition, type MonthResult, type Profile } from '@fieldtrack/rules';
 import { signOut } from '../auth';
 import { wipeDevice } from '../query';
 import { dismissRejected, flush, pendingOps, useSyncState } from '../sync';
@@ -205,4 +205,13 @@ export function SignForm({ edition, name, cta, busy, onSign, onCancel }: { editi
       </div>
     </form>
   );
+}
+
+/** BACB deadline for an unsigned month's form: hours are lost if it isn't signed by the end of the next month. */
+export function Deadline({ month }: { month: string }) {
+  const due = signDeadline(month), today = new Date().toLocaleDateString('en-CA');
+  const days = Math.round((Date.parse(due) - Date.parse(today)) / 86_400_000);
+  const label = new Date(`${due}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (days < 0) return <span className="no small">⚠ Past the BACB deadline ({label}): these hours may not count</span>;
+  return <span className={days <= 7 ? 'warn small' : 'muted small'}>{days <= 7 ? `Due in ${days} day${days === 1 ? '' : 's'}` : `Sign by ${label}`}</span>;
 }

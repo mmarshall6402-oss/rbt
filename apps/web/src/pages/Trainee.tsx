@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { durationMinutes, evaluateForms, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile } from '@fieldtrack/rules';
 import { api, download, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
-import { AppShell, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
+import { AppShell, Deadline, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
 type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
@@ -67,7 +67,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
             <p className="muted small">{standardLabel(profile)}{forms.length > 1 && ' · checked separately for each supervisor’s form'}</p>
             {result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}
           </section>
-          {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} />}
+          {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} withHours={new Set(forms.map(f => f.supervisorId))} />}
         </div>
       </div>
 
@@ -222,7 +222,7 @@ export function EntriesTable({ entries, supervisors, onEdit, editable = false, i
   );
 }
 
-function SignOff({ month, supervisors, me, edition }: { month: string; supervisors: Supervisor[]; me: Me; edition: Edition }) {
+function SignOff({ month, supervisors, me, edition, withHours }: { month: string; supervisors: Supervisor[]; me: Me; edition: Edition; withHours: Set<string | undefined> }) {
   const [signing, setSigning] = useState<string | null>(null);
   const verifications = useVerifications(month), invalidate = useInvalidate(), { pending } = useSyncState();
   const pdf = useMutation({ mutationFn: (s: Supervisor) => download(`/verifications/${month}/form.pdf?supervisorId=${s.id}`, `BACB monthly form ${month} ${s.fullName}.pdf`) });
@@ -242,6 +242,7 @@ function SignOff({ month, supervisors, me, edition }: { month: string; superviso
               {v?.supervisorSignedAt ? <span className="ok">✓ Signed & locked</span>
                 : v?.traineeSignedAt ? <span className="muted small">You signed · waiting on supervisor <button className="ghost small" disabled={pending > 0} onClick={() => setSigning(s.id)}>Re-sign</button></span>
                 : <button className="small" disabled={month > currentMonth() || sign.isPending || pending > 0} onClick={() => setSigning(s.id)}>Sign {monthLabel(month, true)}</button>}
+              {!v?.supervisorSignedAt && withHours.has(s.id) && <Deadline month={month} />}
               <button className="ghost small" disabled={pdf.isPending || pending > 0} onClick={() => pdf.mutate(s)}>BACB form (PDF)</button>
               {signing === s.id && <SignForm edition={edition} name={me.fullName} cta={`Sign ${monthLabel(month, true)} for ${s.fullName}`} busy={sign.isPending || pending > 0} onSign={sign.mutate} onCancel={() => setSigning(null)} />}
             </li>

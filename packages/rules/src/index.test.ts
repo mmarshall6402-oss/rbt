@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, formatHours, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type Profile, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, formatHours, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type Profile, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
@@ -200,5 +200,13 @@ describe('helpers', () => {
   it('finds overlapping entries on the same day only', () => {
     const a = ind('2026-09-01', '08:00', '12:00'), b = ind('2026-09-01', '11:00', '13:00'), c = ind('2026-09-01', '12:00', '13:00'), d = ind('2026-09-02', '08:00', '12:00');
     expect(findOverlaps([d, c, b, a])).toEqual([[a, b], [b, c]]);
+  });
+});
+
+describe('signDeadline', () => {
+  it('is the last day of the following month', () => {
+    expect(signDeadline('2026-09')).toBe('2026-10-31');
+    expect(signDeadline('2026-12')).toBe('2027-01-31');
+    expect(signDeadline('2028-01')).toBe('2028-02-29');
   });
 });
