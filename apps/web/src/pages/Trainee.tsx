@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
-import { api, download, profileOf, useFinals, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { api, download, profileOf, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
@@ -78,7 +78,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
 
       <section className="card">
         <div className="row spread"><h2>Entries</h2><span className="row">Export all hours{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}`, `fieldwork-hours.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div>
-        <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} onEdit={e => { setCopying(null); setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} onRepeat={e => { setEditing(null); setCopying(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
+        <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} month={month} onEdit={e => { setCopying(null); setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} onRepeat={e => { setEditing(null); setCopying(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
       </section>
 
       <MonthChanges month={month} />
@@ -192,10 +192,12 @@ function EntryForm({ month, profile, supervisors, entries, editing, copyOf, onDo
   );
 }
 
-export function EntriesTable({ entries, supervisors, onEdit, onRepeat, editable = false, isLocked = () => false }: { entries: EntryDto[]; supervisors: { id: string; fullName: string }[]; onEdit?: (e: EntryDto) => void; onRepeat?: (e: EntryDto) => void; editable?: boolean; isLocked?: (e: EntryDto) => boolean }) {
+export function EntriesTable({ entries, supervisors, month, traineeId, onEdit, onRepeat, editable = false, isLocked = () => false }: { entries: EntryDto[]; supervisors: { id: string; fullName: string }[]; month: string; traineeId?: string; onEdit?: (e: EntryDto) => void; onRepeat?: (e: EntryDto) => void; editable?: boolean; isLocked?: (e: EntryDto) => boolean }) {
   const change = useLocalChange();
-  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [historyFor, setHistoryFor] = useState<string | null>(null), [commentFor, setCommentFor] = useState<string | null>(null);
+  const comments = useComments(month, traineeId).data ?? [], cols = editable ? 9 : 8;
   const name = (id: string) => supervisors.find(s => s.id === id)?.fullName ?? '—';
+  const open = (id: string) => comments.filter(c => c.entryId === id && !c.resolvedAt).length;
   if (!entries.length) return <p className="muted">No hours logged this month.</p>;
   return (
     <div className="table-wrap">
@@ -216,6 +218,9 @@ export function EntriesTable({ entries, supervisors, onEdit, onRepeat, editable 
                 <td className="num"><strong>{hrs(total)}</strong></td>
                 <td className="actions-cell">
                   {!e.pending && <button className="ghost small" aria-expanded={historyFor === e.id} onClick={() => setHistoryFor(historyFor === e.id ? null : e.id)}>History</button>}
+                  {!e.pending && <button className="ghost small" aria-expanded={commentFor === e.id} onClick={() => setCommentFor(commentFor === e.id ? null : e.id)}>
+                    Comment{open(e.id) ? ` (${open(e.id)})` : ''}
+                  </button>}
                   {editable && <button className="ghost small" title="Copy to today" onClick={() => onRepeat?.(e)}>Repeat</button>}
                   {editable && isLocked(e) && <span className="muted small" title="Signed by your supervisor">🔒 Signed</span>}
                   {editable && !isLocked(e) && <>
@@ -224,8 +229,11 @@ export function EntriesTable({ entries, supervisors, onEdit, onRepeat, editable 
                   </>}
                 </td>
               </tr>,
-              e.description && <tr key={`${e.id}-d`} className="desc"><td colSpan={editable ? 9 : 8}>{e.description}</td></tr>,
-              historyFor === e.id && <tr key={`${e.id}-h`} className="desc"><td colSpan={editable ? 9 : 8}><EntryHistory id={e.id} /></td></tr>,
+              e.description && <tr key={`${e.id}-d`} className="desc"><td colSpan={cols}>{e.description}</td></tr>,
+              historyFor === e.id && <tr key={`${e.id}-h`} className="desc"><td colSpan={cols}><EntryHistory id={e.id} /></td></tr>,
+              (commentFor === e.id || open(e.id) > 0) && <tr key={`${e.id}-c`} className="desc"><td colSpan={cols}>
+                <CommentThread entryId={e.id} comments={comments.filter(c => c.entryId === e.id)} composing={commentFor === e.id} onDone={() => setCommentFor(null)} />
+              </td></tr>,
             ];
           })}
         </tbody>
@@ -366,6 +374,32 @@ function Pace({ program, profile }: { program: ProgramResult; profile: Profile }
           ? <> → log about <strong>{Math.ceil(plan.minutesPerWeek / 60)} h/week</strong> ({Math.ceil(plan.minutesPerMonth / 60)} h/month), with every month meeting its requirements.</>
           : <> → <strong>not possible</strong>: that needs {Math.ceil(plan.minutesPerMonth / 60)} h/month, over the {plan.maxMonthlyMinutes / 60} h monthly maximum.</>)}
       </p>
+    </div>
+  );
+}
+
+/** Review notes on one entry: open ones always show; either person can resolve; composing adds a new one. */
+function CommentThread({ entryId, comments, composing, onDone }: { entryId: string; comments: Comment[]; composing: boolean; onDone: () => void }) {
+  const qc = useQueryClient(), [body, setBody] = useState('');
+  const refresh = () => qc.invalidateQueries({ queryKey: ['comments'] });
+  const add = useMutation({ mutationFn: () => api(`/entries/${entryId}/comments`, 'POST', { body }), onSuccess: () => { setBody(''); onDone(); void refresh() } });
+  const resolve = useMutation({ mutationFn: (id: string) => api(`/comments/${id}/resolve`, 'POST'), onSuccess: () => void refresh() });
+  return (
+    <div className="stack comments">
+      {comments.filter(c => composing || !c.resolvedAt).map(c => (
+        <div key={c.id} className={c.resolvedAt ? 'comment resolved' : 'comment'}>
+          <span className="small"><strong>{c.authorName ?? 'Someone'}</strong> <span className="muted">{new Date(c.createdAt).toLocaleDateString()}</span></span>
+          <span>{c.body}</span>
+          {c.resolvedAt ? <span className="muted small">✓ Resolved</span> : <button className="ghost small" disabled={resolve.isPending} onClick={() => resolve.mutate(c.id)}>Resolve</button>}
+        </div>
+      ))}
+      {composing && (
+        <form className="row" onSubmit={e => { e.preventDefault(); add.mutate() }}>
+          <input aria-label="New comment" placeholder="e.g. End time should be 3:30" value={body} maxLength={2000} onChange={e => setBody(e.target.value)} autoFocus />
+          <button className="small" disabled={!body.trim() || add.isPending}>Add comment</button>
+        </form>
+      )}
+      <ErrorText error={add.error ?? resolve.error} />
     </div>
   );
 }

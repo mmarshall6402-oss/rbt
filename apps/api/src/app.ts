@@ -339,6 +339,31 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       return reply.code(204).send();
     });
 
+    // ---- Review comments ----
+    api.get('/comments', req => asUser(req, async (trx, user) => {
+      const { month, traineeId } = z.object({ month: Month }).extend(TraineeQuery.shape).parse(req.query);
+      const s = await scope(trx, user, traineeId), [from, to] = monthRange(month);
+      return trx.selectFrom('entryComments as c').innerJoin('entries as e', 'e.id', 'c.entryId').leftJoin('users as u', 'u.id', 'c.authorId')
+        .select(['c.id', 'c.entryId', 'c.body', 'c.createdAt', 'c.resolvedAt', 'c.authorId', 'u.fullName as authorName'])
+        .where('e.traineeId', '=', s.traineeId).where('e.workDate', '>=', from).where('e.workDate', '<', to)
+        .$if(!!s.supervisorId, q => q.where('e.supervisorId', '=', s.supervisorId!)).orderBy('c.createdAt').execute();
+    }));
+
+    api.post('/entries/:id/comments', async (req, reply) => {
+      const { id } = Id.parse(req.params);
+      const { body } = z.object({ body: z.string().trim().min(1, 'Write a comment').max(2000) }).parse(req.body);
+      const row = await asUser(req, async (trx, user) =>
+        trx.insertInto('entryComments').values({ entryId: id, authorId: user.id, body, resolvedAt: null }).returning(['id', 'entryId', 'body', 'createdAt', 'resolvedAt']).executeTakeFirstOrThrow());
+      return reply.code(201).send(row);
+    });
+
+    api.post('/comments/:id/resolve', req => asUser(req, async trx => {
+      const { id } = Id.parse(req.params);
+      const row = await trx.updateTable('entryComments').set({ resolvedAt: new Date() }).where('id', '=', id).where('resolvedAt', 'is', null).returning(['id', 'resolvedAt']).executeTakeFirst();
+      if (!row && !await trx.selectFrom('entryComments').select('id').where('id', '=', id).executeTakeFirst()) throw new HttpError(404, 'Not found');
+      return row ?? { id, alreadyResolved: true };
+    }));
+
     // ---- History: "why did my total change?" ----
     api.get('/entries/:id/history', req => asUser(req, async trx => {
       const { id } = Id.parse(req.params);

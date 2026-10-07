@@ -418,6 +418,25 @@ describe.skipIf(!url)('API', () => {
     });
   });
 
+  describe('review comments', () => {
+    it('supervisor comments on an entry, trainee sees and resolves it; nobody else can', async () => {
+      const id = randomUUID();
+      await trainee.log({}, id);
+      const c = await sup.post(`/entries/${id}/comments`, { body: 'End time should be 9:30' });
+      expect(c.statusCode).toBe(201);
+      const [seen] = (await trainee.get('/comments?month=2026-09')).json();
+      expect(seen).toMatchObject({ entryId: id, body: 'End time should be 9:30', authorName: 'Sup', resolvedAt: null });
+      expect((await trainee.post(`/comments/${seen.id}/resolve`)).json().resolvedAt).toBeTruthy();
+      expect((await trainee.post(`/comments/${seen.id}/resolve`)).statusCode).toBe(200); // idempotent
+
+      expect((await sup2.post(`/entries/${id}/comments`, { body: 'x' })).statusCode).toBe(404); // not their entry
+      expect((await other.post(`/entries/${randomUUID()}/comments`, { body: 'x' })).statusCode).toBe(404);
+      expect((await other.post(`/comments/${seen.id}/resolve`)).statusCode).toBe(404);
+      expect((await sup2.get(`/comments?month=2026-09&traineeId=${ids.trainee}`)).json()).toEqual([]); // sup2's link ended in June
+      expect((await sup.post(`/entries/${id}/comments`, { body: '  ' })).statusCode).toBe(400);
+    });
+  });
+
   describe('Final Fieldwork Verification', () => {
     const signMonth = async (month: string) => {
       await trainee.post(`/verifications/${month}/sign`, { supervisorId: ids.sup, signature: 'Trainee', attest: true });

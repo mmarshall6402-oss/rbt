@@ -157,3 +157,6 @@ label.inline { display: inline-flex; flex-direction: row; align-items: center; g
 .pace p { margin: 4px 0; }
 label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
 label.check input { width: auto; }
+.comments { gap: 6px; }
+.comment { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.comment.resolved { color: var(--muted); }

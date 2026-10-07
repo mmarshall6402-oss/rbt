@@ -77,5 +77,8 @@ export const useProgress = (traineeId?: string) =>
 export const useVerifications = (month: string, traineeId?: string) =>
   useQuery({ queryKey: ['verifications', month, traineeId], queryFn: () => api<Verification[]>(`/verifications?month=${month}${q(traineeId)}`) });
 export const useFinals = (traineeId?: string) => useQuery({ queryKey: ['final', traineeId], queryFn: () => api<FinalVerification[]>(`/final?${q(traineeId).slice(1)}`) });
+export interface Comment { id: string; entryId: string; body: string; createdAt: string; resolvedAt: string | null; authorId: string; authorName: string | null }
+export const useComments = (month: string, traineeId?: string) =>
+  useQuery({ queryKey: ['comments', month, traineeId], queryFn: () => api<Comment[]>(`/comments?month=${month}${q(traineeId)}`) });
 export const useSupervisors = () => useQuery({ queryKey: ['supervisors'], queryFn: () => api<Supervisor[]>('/supervisors') });
 export const useTrainees = () => useQuery({ queryKey: ['trainees'], queryFn: () => api<Trainee[]>('/trainees') });

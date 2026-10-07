@@ -134,3 +134,23 @@ test('Repeat copies an entry to today in one click', async ({ page }) => {
   await expect(page.locator('.sync')).toHaveText('✓ Synced');
   await expect(page.getByRole('button', { name: 'Repeat' })).toHaveCount(2);
 });
+
+test('supervisor leaves a review comment; trainee sees it and resolves it', async ({ browser }) => {
+  const { sup, trainee } = await seedPair();
+  const [s] = await call(trainee, '/supervisors');
+  await call(trainee, `/entries/${crypto.randomUUID()}`, 'PUT', { supervisorId: s.id, workDate: '2026-09-04', startTime: '09:00', endTime: '11:00', kind: 'independent' });
+  const supPage = await (await browser.newContext()).newPage();
+  await signInAs(supPage, sup, '/supervise?month=2026-09');
+  await supPage.getByRole('link', { name: 'Review' }).click();
+  await supPage.getByRole('button', { name: 'Comment' }).click();
+  await supPage.getByLabel('New comment').fill('End time should be 11:30');
+  await supPage.getByRole('button', { name: 'Add comment' }).click();
+  await expect(supPage.getByRole('button', { name: 'Comment (1)' })).toBeVisible();
+
+  const page = await (await browser.newContext()).newPage();
+  await signInAs(page, trainee, '/app?month=2026-09');
+  await expect(page.getByText('End time should be 11:30')).toBeVisible(); // open comments always show
+  await page.getByRole('button', { name: 'Resolve' }).click();
+  await expect(page.getByText('End time should be 11:30')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Comment', exact: true })).toBeVisible();
+});

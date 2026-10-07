@@ -79,6 +79,14 @@ export interface DB {
     supervisorSignedAt: Generated<Date>;
     createdAt: Generated<Date>;
   };
+  entryComments: {
+    id: Generated<string>;
+    entryId: string;
+    authorId: string;
+    body: string;
+    createdAt: Generated<Date>;
+    resolvedAt: Date | null;
+  };
   remindersSent: {
     userId: string;
     kind: string;

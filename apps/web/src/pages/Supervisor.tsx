@@ -117,7 +117,7 @@ export function TraineeReview({ me }: { me: Me }) {
 
       <FinalVerificationCard traineeId={traineeId} me={me} edition={edition} />
 
-      <section className="card"><div className="row spread"><h2>Entries</h2><span className="row">Export{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}?traineeId=${traineeId}`, `fieldwork-hours ${trainee?.fullName ?? ''}.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div><EntriesTable entries={entries.data ?? []} supervisors={[]} /></section>
+      <section className="card"><div className="row spread"><h2>Entries</h2><span className="row">Export{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}?traineeId=${traineeId}`, `fieldwork-hours ${trainee?.fullName ?? ''}.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div><EntriesTable entries={entries.data ?? []} supervisors={[]} month={month} traineeId={traineeId} /></section>
     </AppShell>
   );
 }
