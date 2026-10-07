@@ -10,14 +10,14 @@ import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, Err
 const today = () => new Date().toLocaleDateString('en-CA');
 type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
 const blank = (supervisorId = '', workDate = today()): Draft =>
-  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', isGroup: false, contact: null, format: null, description: '' });
+  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', isGroup: false, contact: null, format: null, description: '', observedAsync: false });
 const fromEntry = (e: EntryDto, workDate = e.workDate): Draft => ({
   supervisorId: e.supervisorId, workDate, startTime: e.startTime, endTime: e.endTime, kind: e.kind, restrictedHours: String(e.restrictedMinutes / 60),
-  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description,
+  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description, observedAsync: !!e.observedAsync,
 });
 const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
   ...d, restrictedMinutes: Math.round((Number(restrictedHours) || 0) * 60),
-  ...(d.kind === 'independent' ? { isGroup: false, contact: null, format: null } : { format: d.format ?? 'in_person' }),
+  ...(d.kind === 'independent' ? { isGroup: false, contact: null, format: null } : { format: d.format ?? 'in_person', observedAsync: false }),
 });
 
 export function TraineeDashboard({ me }: { me: Me }) {
@@ -198,6 +198,12 @@ function EntryForm({ month, profile, supervisors, entries, editing, copyOf, onDo
         <label>Restricted hours<input type="number" min="0" step="0.05" value={d.restrictedHours} onChange={e => set('restrictedHours', e.target.value)} /></label>
         {ready && !problems.length && <p className="muted small self-end">{hrs(durationMinutes(input))} h total · {hrs(durationMinutes(input) - input.restrictedMinutes)} h unrestricted</p>}
       </div>
+      {d.kind === 'independent' && (
+        <label className="check">
+          <input type="checkbox" checked={d.observedAsync} onChange={e => set('observedAsync', e.target.checked)} />
+          My supervisor observed this session by recording (counts toward observation only)
+        </label>
+      )}
       {d.kind === 'supervised' && (
         <div className="row">
           <label>Supervision<select value={d.isGroup ? 'group' : 'individual'} onChange={e => set('isGroup', e.target.value === 'group')}><option value="individual">Individual</option><option value="group">Group</option></select></label>
@@ -236,7 +242,7 @@ export function EntriesTable({ entries, supervisors, month, traineeId, onEdit, o
               <tr key={e.id} className={e.description ? 'has-desc' : ''}>
                 <td>{dateLabel(e.workDate)}{e.pending && <div className="muted small" title="Saved on this device; uploads automatically">☁ On device</div>}</td>
                 <td>{time12(e.startTime)}–{time12(e.endTime)}</td>
-                <td><span className={`tag ${e.kind}`}>{e.kind === 'independent' ? 'Independent' : e.isGroup ? 'Supervised · group' : 'Supervised'}</span></td>
+                <td><span className={`tag ${e.kind}`}>{e.kind === 'independent' ? 'Independent' : e.isGroup ? 'Supervised · group' : 'Supervised'}</span>{e.observedAsync && <div className="muted small">Observed by recording</div>}</td>
                 <td className="num">{hrs(e.restrictedMinutes)}</td>
                 <td className="num">{hrs(total - e.restrictedMinutes)}</td>
                 <td>{e.contact === 'observation' ? 'Observation' : e.contact === 'contact' ? 'Contact' : ''}{e.format ? <span className="muted small"> · {e.format === 'online' ? 'Online' : 'In person'}</span> : null}</td>
@@ -303,7 +309,7 @@ function SignOff({ month, supervisors, me, edition, withHours }: { month: string
 }
 
 const FIELD_LABELS: Record<string, string> = {
-  workDate: 'Date', startTime: 'Start', endTime: 'End', kind: 'Type', restrictedMinutes: 'Restricted minutes', isGroup: 'Group',
+  workDate: 'Date', startTime: 'Start', endTime: 'End', kind: 'Type', restrictedMinutes: 'Restricted minutes', isGroup: 'Group', observedAsync: 'Observed by recording',
   contact: 'Contact', format: 'Format', description: 'Description', supervisorId: 'Supervisor', deletedAt: 'Deleted',
 };
 const showValue = (field: string, v: unknown) =>

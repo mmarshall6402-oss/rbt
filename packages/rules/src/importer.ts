@@ -61,7 +61,7 @@ const yes = (s: string) => /^(y|yes|true|1|x)$/i.test(s.trim());
 
 export interface ImportRow {
   line: number; // 1-based line in the file, header = 1
-  entry: Entry & { format: 'in_person' | 'online' | null; description: string };
+  entry: Entry & { format: 'in_person' | 'online' | null; description: string; observedAsync: boolean };
   supervisorName: string;
   errors: string[];
 }
@@ -85,12 +85,13 @@ export function importCsv(text: string): { rows: ImportRow[]; missing: Column[] 
     if (!Number.isFinite(restrictedHours) || restrictedHours < 0) errors.push(`Restricted hours "${get(r, 'restricted')}" isn't a number`);
     const c = get(r, 'contact').toLowerCase();
     const contact: ContactType | null = kind === 'supervised' ? (c.includes('observ') ? 'observation' : c.includes('contact') ? 'contact' : null) : null;
+    const observedAsync = kind === 'independent' && /record|async|video/.test(c); // our export writes "recorded observation"
     const entry = {
       workDate: workDate ?? '', startTime: startTime ?? '', endTime: endTime ?? '', kind, contact,
       restrictedMinutes: Math.round((Number.isFinite(restrictedHours) ? restrictedHours : 0) * 60),
       isGroup: kind === 'supervised' && yes(get(r, 'group')),
       format: kind === 'supervised' ? (/online|remote|virtual|tele/i.test(get(r, 'format')) ? 'online' : 'in_person') : null,
-      description: get(r, 'description').slice(0, 5000),
+      description: get(r, 'description').slice(0, 5000), observedAsync,
     } as ImportRow['entry'];
     if (!errors.length) errors.push(...validateEntry(entry));
     return { line: i + 2, entry, supervisorName: get(r, 'supervisor'), errors };

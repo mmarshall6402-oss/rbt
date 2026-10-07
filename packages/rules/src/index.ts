@@ -14,6 +14,9 @@ export interface Entry {
   isGroup: boolean; // group supervision (supervised entries only)
   contact: ContactType | null; // supervised entries only
   supervisorId?: string; // which verification form (supervision structure) the entry belongs to
+  // Independent session the supervisor later observed by recording, without real-time feedback.
+  // Handbook: counts toward observation with a client only, not contacts or supervised hours.
+  observedAsync?: boolean;
 }
 
 export type Credential = 'bcba' | 'bcaba';
@@ -111,6 +114,7 @@ export function validateEntry(e: Entry): string[] {
   if (!Number.isInteger(e.restrictedMinutes) || e.restrictedMinutes < 0) errors.push('Restricted minutes must be a whole number ≥ 0');
   else if (d && e.restrictedMinutes > d) errors.push('Restricted time exceeds entry length');
   if (e.kind === 'independent' && (e.isGroup || e.contact)) errors.push('Independent entries cannot have group supervision or a contact type');
+  if (e.kind === 'supervised' && e.observedAsync) errors.push('A recorded observation goes on an independent entry (the supervisor wasn\'t present)');
   return errors;
 }
 
@@ -133,7 +137,11 @@ export function summarize(entries: readonly Entry[], rules: RuleSet): MonthSumma
     const d = durationMinutes(e);
     s.totalMinutes += d;
     s.restrictedMinutes += e.restrictedMinutes;
-    if (e.kind === 'independent') { s.independentMinutes += d; return }
+    if (e.kind === 'independent') {
+      s.independentMinutes += d;
+      if (e.observedAsync) { obsKeys.add(`async-${i}`); s.observationMinutes += d }
+      return;
+    }
     s.supervisedMinutes += d;
     if (e.isGroup) s.groupMinutes += d;
     const key = rules.contactCounting === 'perDay' ? e.workDate : String(i);

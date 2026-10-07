@@ -266,6 +266,13 @@ describe.skipIf(!url)('API', () => {
     expect((await trainee.get('/verifications?month=2026-09')).json()[0].fieldworkType).toBe('concentrated');
   });
 
+  it('a recorded observation on an independent entry counts toward observation only', async () => {
+    await trainee.log({ observedAsync: true });
+    expect((await trainee.get('/months/2026-09')).json().summary).toMatchObject({ supervisedMinutes: 0, observations: 1, contacts: 0 });
+    expect((await trainee.log({ kind: 'supervised', observedAsync: true })).statusCode).toBe(400);
+    expect((await trainee.get('/entries?month=2026-09')).json()[0].observedAsync).toBe(true);
+  });
+
   describe('signup', () => {
     it('creates a trainee', async () => {
       const res = await as('new@x').post('/signup', { role: 'trainee', fullName: 'New', fieldworkType: 'supervised' });

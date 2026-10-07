@@ -256,3 +256,16 @@ describe('mixed fieldwork types (Handbook: one type per month per supervision st
     expect(evaluateProgram(entries, { ...C27, credential: 'bcaba' }, undefined, augSupervised).mixed).toBe('estimate');
   });
 });
+
+describe('asynchronous observation (recorded video, no real-time feedback)', () => {
+  const entries = [ind('2026-09-01', '08:00', '18:00'), { ...ind('2026-09-02', '08:00', '19:30'), observedAsync: true }, sup('2026-09-03', '09:00', '11:00')];
+  it('counts toward observation only, not supervised hours or contacts', () => {
+    const r = evaluateMonth('2026-09', entries, C27);
+    expect(r.summary).toMatchObject({ supervisedMinutes: 120, contacts: 1, observationMinutes: 690, observations: 1 });
+    expect(check(r, 'observations').ok).toBe(true);
+    expect(check(evaluateMonth('2026-09', entries, C22), 'observations').ok).toBe(true); // 2022: one observation per month
+  });
+  it('belongs on independent entries only', () => {
+    expect(validateEntry({ ...sup('2026-09-03', '09:00', '11:00'), observedAsync: true })).toEqual([expect.stringMatching(/independent entry/)]);
+  });
+});

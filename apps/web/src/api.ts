@@ -13,6 +13,7 @@ export interface Me {
 export interface EntryInput {
   supervisorId: string; workDate: string; startTime: string; endTime: string; kind: EntryKind;
   restrictedMinutes: number; isGroup: boolean; contact: ContactType | null; format: 'in_person' | 'online' | null; description: string;
+  observedAsync: boolean;
 }
 export interface EntryDto extends EntryInput { id: string; createdAt: string; updatedAt: string; pending?: boolean }
 export interface Person { id: string; fullName: string; email: string; startsOn: string; endsOn: string | null }

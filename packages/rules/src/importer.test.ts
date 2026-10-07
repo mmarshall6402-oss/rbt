@@ -14,13 +14,19 @@ describe('importCsv', () => {
     const [r] = importCsv(csv).rows;
     expect(r).toEqual({ line: 2, supervisorName: 'Lorinda Otto', errors: [], entry: {
       workDate: '2026-09-02', startTime: '09:00', endTime: '10:30', kind: 'supervised', contact: 'observation',
-      restrictedMinutes: 30, isGroup: true, format: 'online', description: 'Observed "DTT"' } });
+      restrictedMinutes: 30, isGroup: true, format: 'online', description: 'Observed "DTT"', observedAsync: false } });
   });
 
   it('maps other spreadsheets: US dates, 12-hour times, synonyms; independent rows drop supervision fields', () => {
     const { rows } = importCsv('Session Date,Time In,Time Out,Activity Type,BCBA,Notes,Contact\n9/3/26,1:15 PM,3:00 pm,Independent,Sam,Prep,observation\n');
     expect(rows[0]!.entry).toMatchObject({ workDate: '2026-09-03', startTime: '13:15', endTime: '15:00', kind: 'independent', contact: null, format: null, description: 'Prep' });
     expect(rows[0]!.supervisorName).toBe('Sam');
+  });
+
+  it('round-trips a recorded observation on an independent entry', () => {
+    const { rows } = importCsv('Date,Start,End,Type,Contact\n2026-09-04,09:00,10:00,independent,recorded observation\n');
+    expect(rows[0]!.entry).toMatchObject({ kind: 'independent', contact: null, observedAsync: true });
+    expect(rows[0]!.errors).toEqual([]);
   });
 
   it('reports bad rows with their line number instead of guessing', () => {

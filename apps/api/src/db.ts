@@ -49,6 +49,7 @@ export interface DB {
     contact: ContactType | null;
     format: SupervisionFormat | null;
     description: string;
+    observedAsync: Generated<boolean>;
     createdAt: Generated<Date>;
     updatedAt: Generated<Date>;
     deletedAt: Date | null;

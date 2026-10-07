@@ -31,6 +31,7 @@ const EntryBody = z.object({
   contact: z.enum(['contact', 'observation']).nullable().default(null),
   format: z.enum(['in_person', 'online']).nullable().default(null),
   description: z.string().max(5000).default(''),
+  observedAsync: z.boolean().default(false),
 });
 const FieldworkTypeEnum = z.enum(['supervised', 'concentrated']);
 const CredentialEnum = z.enum(['bcba', 'bcaba']);
@@ -60,7 +61,7 @@ const newInviteCode = () => Array.from(randomBytes(8), b => CODE_ALPHABET[b % CO
 /** JSON with sorted keys: jsonb reorders keys, so compare snapshots canonically. */
 const canonical = (v: unknown) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
 
-const ENTRY_FIELDS = ['supervisorId', 'organizationId', 'workDate', 'startTime', 'endTime', 'kind', 'restrictedMinutes', 'isGroup', 'contact', 'format', 'description'] as const;
+const ENTRY_FIELDS = ['supervisorId', 'organizationId', 'workDate', 'startTime', 'endTime', 'kind', 'restrictedMinutes', 'isGroup', 'contact', 'format', 'description', 'observedAsync'] as const;
 // Snapshot keys arrive camelCased (CamelCasePlugin converts nested JSON keys too).
 const AUDIT_IGNORED = new Set(['id', 'traineeId', 'organizationId', 'createdAt', 'updatedAt']);
 type AuditRow = { id: string; rowId: string; action: string; at: Date; oldRow: unknown; newRow: unknown; actorId: string | null; actorName: string | null };
@@ -317,7 +318,7 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
         const rows = (await listEntries(trx, s)).reverse().map(e => {
           const min = durationMinutes(e);
           return [e.workDate, e.startTime.slice(0, 5), e.endTime.slice(0, 5), (min / 60).toFixed(3), e.kind, names.get(e.supervisorId) ?? '',
-            (e.restrictedMinutes / 60).toFixed(3), ((min - e.restrictedMinutes) / 60).toFixed(3), e.isGroup ? 'yes' : 'no', e.contact ?? '', e.format ?? '', e.description];
+            (e.restrictedMinutes / 60).toFixed(3), ((min - e.restrictedMinutes) / 60).toFixed(3), e.isGroup ? 'yes' : 'no', e.contact ?? (e.observedAsync ? 'recorded observation' : ''), e.format ?? '', e.description];
         });
         return toCsv([['Date', 'Start', 'End', 'Hours', 'Type', 'Supervisor', 'Restricted hours', 'Unrestricted hours', 'Group', 'Contact', 'Format', 'Description'], ...rows]);
       });
