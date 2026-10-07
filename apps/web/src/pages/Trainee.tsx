@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { durationMinutes, evaluateForms, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Profile } from '@fieldtrack/rules';
-import { api, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { api, download, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
@@ -224,6 +224,7 @@ export function EntriesTable({ entries, supervisors, onEdit, editable = false, i
 
 function SignOff({ month, supervisors }: { month: string; supervisors: Supervisor[] }) {
   const verifications = useVerifications(month), invalidate = useInvalidate(), { pending } = useSyncState();
+  const pdf = useMutation({ mutationFn: (s: Supervisor) => download(`/verifications/${month}/form.pdf?supervisorId=${s.id}`, `BACB monthly form ${month} ${s.fullName}.pdf`) });
   const sign = useMutation({ mutationFn: (supervisorId: string) => api(`/verifications/${month}/sign`, 'POST', { supervisorId }), onSuccess: () => void invalidate() });
   return (
     <section className="card">
@@ -237,13 +238,14 @@ function SignOff({ month, supervisors }: { month: string; supervisors: Superviso
               {v?.supervisorSignedAt ? <span className="ok">✓ Signed & locked</span>
                 : v?.traineeSignedAt ? <span className="muted small">You signed · waiting on supervisor <button className="ghost small" disabled={pending > 0} onClick={() => sign.mutate(s.id)}>Re-sign</button></span>
                 : <button className="small" disabled={month > currentMonth() || sign.isPending || pending > 0} onClick={() => sign.mutate(s.id)}>Sign {monthLabel(month, true)}</button>}
+              <button className="ghost small" disabled={pdf.isPending || pending > 0} onClick={() => pdf.mutate(s)}>BACB form (PDF)</button>
             </li>
           );
         })}
       </ul>
       {pending > 0 && <p className="notice">Waiting for {pending} change(s) to upload before you can sign.</p>}
       <p className="muted small">Signing sends this month's hours under that supervisor for their countersignature. Re-sign if you edit entries afterward.</p>
-      <ErrorText error={sign.error} />
+      <ErrorText error={sign.error ?? pdf.error} />
     </section>
   );
 }
@@ -291,7 +293,7 @@ function MonthChanges({ month }: { month: string }) {
 function StandardSettings({ me }: { me: Me }) {
   const qc = useQueryClient();
   const save = useMutation({
-    mutationFn: (patch: Partial<Pick<Me, 'credential' | 'fieldworkType' | 'rulesEdition'>>) => api<Me>('/me', 'PATCH', patch),
+    mutationFn: (patch: Partial<Pick<Me, 'credential' | 'fieldworkType' | 'rulesEdition' | 'bacbId' | 'fieldworkState' | 'fieldworkCountry'>>) => api<Me>('/me', 'PATCH', patch),
     onSuccess: user => { qc.setQueryData(['me'], user); void qc.invalidateQueries({ queryKey: ['progress'] }) },
   });
   return (
@@ -316,6 +318,15 @@ function StandardSettings({ me }: { me: Me }) {
         </label>
       </div>
       <p className="muted small">The BACB applies rules by your application date, not by when you worked. Months already signed keep the rules they were signed under.</p>
+      <h3>For your BACB forms</h3>
+      <div className="row">
+        {([['bacbId', 'BACB ID'], ['fieldworkState', 'State where fieldwork occurs'], ['fieldworkCountry', 'Country']] as const).map(([k, label]) => (
+          <label key={k}>{label}
+            <input defaultValue={me[k] ?? ''} maxLength={100} onBlur={e => e.target.value.trim() !== (me[k] ?? '') && save.mutate({ [k]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+      {(!me.bacbId || !me.fieldworkState || !me.fieldworkCountry) && <p className="notice">The BACB denies verification forms with missing information. Fill these in before you download forms.</p>}
       <ErrorText error={save.error} />
     </section>
   );

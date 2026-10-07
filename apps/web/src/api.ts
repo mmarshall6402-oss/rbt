@@ -8,7 +8,7 @@ export type { MonthResult, ProgramResult };
 export interface Me {
   id: string; email: string; fullName: string; role: 'trainee' | 'supervisor' | 'admin';
   bacbId: string | null; fieldworkType: FieldworkType | null; inviteCode: string | null;
-  credential: Credential | null; rulesEdition: Edition | null;
+  credential: Credential | null; rulesEdition: Edition | null; fieldworkState: string | null; fieldworkCountry: string | null;
 }
 export interface EntryInput {
   supervisorId: string; workDate: string; startTime: string; endTime: string; kind: EntryKind;
@@ -32,6 +32,15 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error ?? res.statusText);
   return data as T;
+}
+
+/** Downloads an authenticated file (e.g. a PDF) without exposing tokens in a URL. */
+export async function download(path: string, filename: string) {
+  const res = await fetch(`/api${path}`, { headers: await authHeaders() });
+  if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => ({}))).error ?? res.statusText);
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await res.blob()), download: filename });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 /** The rules standard for a trainee record (null if incomplete). */

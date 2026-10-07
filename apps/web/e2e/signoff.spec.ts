@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import { call, logEntry, seedPair, signInAs } from './helpers';
 
@@ -56,6 +57,11 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   await page.reload();
   await expect(page.getByText('✓ Signed & locked')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+
+  // The prefilled official BACB form downloads, signed and locked
+  const [file] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'BACB form (PDF)' }).click()]);
+  expect(file.suggestedFilename()).toBe('BACB monthly form 2026-09 Lorinda Otto.pdf');
+  expect((await readFile(await file.path())).subarray(0, 5).toString()).toBe('%PDF-');
 });
 
 test('supervisor only sees hours logged under them', async ({ page }) => {

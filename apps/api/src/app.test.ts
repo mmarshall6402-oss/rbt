@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
+import { PDFDocument } from 'pdf-lib';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import { devVerify } from './auth.js';
@@ -331,6 +332,49 @@ describe.skipIf(!url)('API', () => {
     it('rejects unlinked people', async () => {
       expect((await other.post('/verifications/2026-09/sign', { supervisorId: ids.sup })).statusCode).toBe(404);
       expect((await sup2.post('/verifications/2026-09/sign', { traineeId: ids.other })).statusCode).toBe(404);
+    });
+  });
+
+  describe('BACB monthly verification form (PDF)', () => {
+    const form = async (res: Awaited<ReturnType<typeof trainee.get>>) => {
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('application/pdf');
+      const f = (await PDFDocument.load(res.rawPayload)).getForm();
+      return (name: string) => f.getFields().length ? f.getTextField(name).getText() ?? '' : null; // null: flattened (signed)
+    };
+    const url = `/verifications/2026-09/form.pdf`;
+
+    it('prefills the official form, carries signatures only while valid, and locks once both sign', async () => {
+      const id = randomUUID();
+      await trainee.log({ endTime: '10:20' }, id); // 2 h 20 m independent
+      await trainee.log({ workDate: '2026-09-02', kind: 'supervised', contact: 'contact', endTime: '09:00' });
+      await trainee.patch('/me', { fieldworkState: 'Ohio', fieldworkCountry: 'United States' });
+      let get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
+      expect(['TRAINEE_NAME', 'TRAINEE_CERTIFICATE_MONTH/YEAR', 'TRAINEE_FIELDWORK_STATE', 'RESPONSIBLE_SUPERVISOR_NAME', 'INDEPENDENT_HOURS', 'SUPERVISED_HOURS', 'TOTAL_FIELDWORK', 'PERCENT_HOURS_SUPERVISED', 'TRAINEE_SIGNATURE_DATE'].map(get))
+        .toEqual(['Trainee', '09/2026', 'Ohio', 'Sup', '2.33', '1.00', '3.33', String(1 / 3.33), '']); // percent stored as the form's own fraction
+
+      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup });
+      expect((await form(await sup.get(`${url}?traineeId=${ids.trainee}`)))('TRAINEE_SIGNATURE_DATE')).toMatch(/^\d\d\/\d\d\/2026$/);
+      await trainee.log({ endTime: '10:00' }, id);
+      get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
+      expect([get('TRAINEE_SIGNATURE_DATE'), get('INDEPENDENT_HOURS')]).toEqual(['', '2.00']); // stale signature dropped
+
+      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup });
+      await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee });
+      expect((await form(await trainee.get(`${url}?supervisorId=${ids.sup}`)))('TRAINEE_NAME')).toBeNull();
+    });
+
+    it('uses the 2027 form for 2027 trainees', async () => {
+      await trainee.patch('/me', { rulesEdition: '2027' });
+      await trainee.log({ workDate: '2026-09-03', kind: 'supervised', contact: 'observation', endTime: '09:30' });
+      const get = await form(await trainee.get(`${url}?supervisorId=${ids.sup}`));
+      expect(['Supervised_Hours', 'Supervised_Minutes', 'Observation_Hours', 'Independent_Minutes 3', 'Total_Fieldwork_Hours'].map(get)).toEqual(['1', '30', '1', '30', '1']);
+    });
+
+    it('only for linked pairs', async () => {
+      expect((await sup2.get(`${url}?traineeId=${ids.other}`)).statusCode).toBe(404);
+      expect((await other.get(`${url}?supervisorId=${ids.sup}`)).statusCode).toBe(404);
+      expect((await trainee.get(url)).statusCode).toBe(400);
     });
   });
 });

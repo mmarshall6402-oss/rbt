@@ -20,6 +20,8 @@ export interface DB {
     fieldworkType: FieldworkType | null;
     credential: Credential | null;
     rulesEdition: Edition | null;
+    fieldworkState: string | null;
+    fieldworkCountry: string | null;
     inviteCode: string | null;
     createdAt: Generated<Date>;
   };

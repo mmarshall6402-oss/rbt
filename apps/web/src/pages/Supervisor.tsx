@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
-import { api, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
+import { api, download, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
 import { AppShell, Checklist, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
 import { EntriesTable } from './Trainee';
 
@@ -83,6 +83,7 @@ export function TraineeReview({ me }: { me: Me }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['verifications'] }),
   });
   const v = sig.data?.[0];
+  const pdf = useMutation({ mutationFn: () => download(`/verifications/${month}/form.pdf?traineeId=${traineeId}`, `BACB monthly form ${month} ${trainee?.fullName ?? ''}.pdf`) });
 
   return (
     <AppShell name={me.fullName} nav={<MonthNav month={month} onChange={setMonth} />}>
@@ -104,7 +105,8 @@ export function TraineeReview({ me }: { me: Me }) {
             </>
           )}
           {v?.supervisorSignedAt && <p className="muted small">Signed {new Date(v.supervisorSignedAt).toLocaleString()} · rules {v.rulesVersion}</p>}
-          <ErrorText error={sign.error} />
+          <button className="ghost small" disabled={pdf.isPending} onClick={() => pdf.mutate()}>Download BACB form (PDF)</button>
+          <ErrorText error={sign.error ?? pdf.error} />
         </section>
       </div>
 

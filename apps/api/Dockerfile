@@ -10,7 +10,7 @@ COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile --filter "@fieldtrack/api..."
 COPY packages/rules packages/rules
 COPY apps/api apps/api
-RUN pnpm --filter @fieldtrack/api build && pnpm --filter @fieldtrack/api deploy --prod --legacy /out
+RUN pnpm --filter @fieldtrack/api build && pnpm --filter @fieldtrack/api forms && pnpm --filter @fieldtrack/api deploy --prod --legacy /out
 
 FROM node:22-slim
 WORKDIR /app
@@ -19,6 +19,7 @@ ENV NODE_ENV=production PORT=3000 MIGRATIONS_DIR=/app/db/migrations DB_SSLROOTCE
 ADD --chmod=644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /app/rds-ca.pem
 COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /repo/apps/api/dist ./dist
+COPY --from=build /repo/apps/api/forms ./forms
 COPY db/migrations ./db/migrations
 USER node
 EXPOSE 3000

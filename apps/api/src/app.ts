@@ -5,6 +5,7 @@ import { z, ZodError } from 'zod';
 import { durationMinutes, evaluateMonth, evaluateProgram, findOverlaps, validateEntry, type Entry, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
+import { fillMonthlyForm } from './forms.js';
 import type { DB, User } from './db.js';
 
 export class HttpError extends Error {
@@ -32,7 +33,8 @@ const EntryBody = z.object({
 const FieldworkTypeEnum = z.enum(['supervised', 'concentrated']);
 const CredentialEnum = z.enum(['bcba', 'bcaba']);
 const EditionEnum = z.enum(['2022', '2027']);
-const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum }).partial()
+const Place = z.string().trim().max(100).transform(v => v || null);
+const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum, fieldworkState: Place, fieldworkCountry: Place, bacbId: Place }).partial()
   .refine(b => Object.keys(b).length > 0, 'Nothing to update');
 const SignupBody = z.discriminatedUnion('role', [
   z.object({
@@ -336,6 +338,34 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
       return trx.updateTable('monthVerifications').set({ supervisorSignedAt: new Date() }).where('id', '=', existing.id)
         .returning(['id', 'month', 'traineeSignedAt', 'supervisorSignedAt']).executeTakeFirstOrThrow();
     }));
+
+    // The official BACB Monthly Fieldwork Verification Form, prefilled. Signed months print the signed snapshot.
+    api.get('/verifications/:month/form.pdf', async (req, reply) => {
+      const { month } = z.object({ month: Month }).parse(req.params);
+      const q = z.object({ traineeId: z.uuid().optional(), supervisorId: z.uuid().optional() }).parse(req.query);
+      const pdf = await asUser(req, async (trx, user) => {
+        const traineeId = user.role === 'trainee' ? user.id : q.traineeId, supervisorId = user.role === 'supervisor' ? user.id : q.supervisorId;
+        if (!traineeId || !supervisorId || user.role === 'admin') throw new HttpError(400, user.role === 'trainee' ? 'supervisorId is required' : 'traineeId is required');
+        if (!await trx.selectFrom('supervisions').select('id').where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).executeTakeFirst()) throw new HttpError(404, 'Not found');
+        const people = await trx.selectFrom('users').selectAll().where('id', 'in', [traineeId, supervisorId]).execute();
+        const t = people.find(p => p.id === traineeId)!, s = people.find(p => p.id === supervisorId)!;
+        const v = await trx.selectFrom('monthVerifications').selectAll().where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('month', '=', `${month}-01`).executeTakeFirst();
+        const live = await pairResult(trx, traineeId, supervisorId, month);
+        // A trainee signature only stands while the entries still match what they signed.
+        const traineeSignatureValid = !!v?.traineeSignedAt && (!!v.supervisorSignedAt || canonical(v.summary) === canonical(live));
+        const result = v?.supervisorSignedAt ? v.summary as typeof live : live;
+        return fillMonthlyForm({
+          edition: result.rulesVersion.endsWith('2027') ? '2027' : '2022', fieldworkType: v?.fieldworkType ?? t.fieldworkType!, month,
+          trainee: { name: t.fullName, bacbId: t.bacbId }, supervisor: { name: s.fullName, bacbId: s.bacbId },
+          state: t.fieldworkState, country: t.fieldworkCountry, summary: result.summary,
+          traineeSigned: traineeSignatureValid ? { name: t.fullName, at: v!.traineeSignedAt! } : null,
+          supervisorSigned: v?.supervisorSignedAt ? { name: s.fullName, at: v.supervisorSignedAt } : null,
+          reference: v?.id ?? 'unsigned draft',
+        });
+      });
+      return reply.type('application/pdf').header('cache-control', 'no-store')
+        .header('content-disposition', `attachment; filename="fieldwork-verification-${month}.pdf"`).send(Buffer.from(pdf));
+    });
   }, { prefix: '/api' });
 
   return app;
