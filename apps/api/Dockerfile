@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from the repo root: docker build -f apps/api/Dockerfile .
-FROM node:22-slim AS build
+FROM node:25-slim AS build
 RUN corepack enable
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -12,7 +12,7 @@ COPY packages/rules packages/rules
 COPY apps/api apps/api
 RUN pnpm --filter @fieldtrack/api build && pnpm --filter @fieldtrack/api forms && pnpm --filter @fieldtrack/api deploy --prod --legacy /out
 
-FROM node:22-slim
+FROM node:25-slim
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000 MIGRATIONS_DIR=/app/db/migrations DB_SSLROOTCERT=/app/rds-ca.pem
 # TLS to RDS is verified against Amazon's CA bundle, not just encrypted.
