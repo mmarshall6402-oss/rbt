@@ -119,20 +119,11 @@ resource "aws_cloudfront_function" "spa" {
 locals {
   region      = data.aws_region.current.region
   auth_domain = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${local.region}.amazoncognito.com"
-  csp = join("; ", [
-    "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self'",
-    "style-src-attr 'unsafe-inline'", # React style={{...}} for chart sizing
-    "img-src 'self' data:",
-    "connect-src 'self' https://cognito-idp.${local.region}.amazonaws.com ${local.auth_domain} https://*.ingest.us.sentry.io https://*.ingest.sentry.io",
-    "worker-src 'self'",
-    "manifest-src 'self'",
-    "frame-ancestors 'none'",
-    "base-uri 'self'",
-    "form-action 'self' ${local.auth_domain}",
-    "object-src 'none'",
-  ])
+  # Shared with the local preview server so browser tests run under the same policy (apps/web/security-headers.json).
+  headers = jsondecode(file("${path.module}/../../../../apps/web/security-headers.json"))
+  csp = replace(replace(join("; ", local.headers.csp),
+    "{connect}", "https://cognito-idp.${local.region}.amazonaws.com ${local.auth_domain} https://*.ingest.us.sentry.io https://*.ingest.sentry.io"),
+  "{auth}", local.auth_domain)
 }
 
 resource "aws_cloudfront_response_headers_policy" "security" {
@@ -156,14 +147,14 @@ resource "aws_cloudfront_response_headers_policy" "security" {
       override     = true
     }
     referrer_policy {
-      referrer_policy = "strict-origin-when-cross-origin"
+      referrer_policy = local.headers.referrerPolicy
       override        = true
     }
   }
   custom_headers_config {
     items {
       header   = "Permissions-Policy"
-      value    = "camera=(), microphone=(), geolocation=(), payment=()"
+      value    = local.headers.permissionsPolicy
       override = true
     }
   }

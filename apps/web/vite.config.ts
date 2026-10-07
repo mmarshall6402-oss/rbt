@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import headers from './security-headers.json';
 
 // In production CloudFront serves the build and routes /api/* to the API, so the app always calls same-origin /api.
 export default defineConfig({
@@ -19,4 +20,13 @@ export default defineConfig({
     }),
   ],
   server: { proxy: { '/api': 'http://localhost:3000' } },
+  // Same security headers as CloudFront (minus HSTS on plain http), so e2e tests catch anything the policy would break.
+  preview: {
+    proxy: { '/api': 'http://localhost:3000' },
+    headers: {
+      'Content-Security-Policy': headers.csp.join('; ').replace(' {connect}', '').replace(' {auth}', ''),
+      'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
+      'Referrer-Policy': headers.referrerPolicy, 'Permissions-Policy': headers.permissionsPolicy,
+    },
+  },
 });

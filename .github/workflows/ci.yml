@@ -107,6 +107,43 @@ jobs:
         if: failure()
         with: { name: playwright-traces, path: apps/web/test-results, retention-days: 7 }
 
+  dast:
+    name: Security scan of the running app (OWASP ZAP baseline)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: fieldtrack }
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/fieldtrack
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm --filter @fieldtrack/web build
+      - name: Start the API and the production build (served with the production security headers)
+        run: |
+          node apps/api/scripts/fetch-forms.mjs
+          (cd apps/api && AUTH_MODE=dev PORT=3000 nohup pnpm exec tsx src/server.ts > /tmp/api.log 2>&1 &)
+          (cd apps/web && nohup pnpm exec vite preview --port 4173 --strictPort > /tmp/web.log 2>&1 &)
+          for _ in $(seq 60); do curl -sf http://localhost:4173/api/health > /dev/null && exit 0; sleep 1; done
+          cat /tmp/api.log /tmp/web.log; exit 1
+      - name: ZAP baseline (fails on the rules marked FAIL in .zap/rules.tsv)
+        run: |
+          mkdir -p zap && cp .zap/rules.tsv zap/ && chmod -R 777 zap
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:4173 -c rules.tsv -r report.html -J report.json -j || code=$?
+          # 1 = a FAIL rule fired; 2 = warnings only (reported, not blocking)
+          [ "${code:-0}" -ne 1 ] && [ "${code:-0}" -ne 3 ]
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: zap-report, path: zap, retention-days: 14 }
+
   image:
     name: API container image builds
     runs-on: ubuntu-latest

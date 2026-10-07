@@ -1,0 +1,19 @@
+{
+  "_comment": "Single source for the site's security headers: CloudFront (infra/terraform/modules/app/web.tf) and the local preview server (vite.config.ts) both read this, so every browser test runs under the production policy. {connect} and {auth} are filled per environment.",
+  "csp": [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "style-src-attr 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self' {connect}",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self' {auth}",
+    "object-src 'none'"
+  ],
+  "referrerPolicy": "strict-origin-when-cross-origin",
+  "permissionsPolicy": "camera=(), microphone=(), geolocation=(), payment=()"
+}
