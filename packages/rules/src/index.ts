@@ -315,3 +315,5 @@ export const FINAL_ATTESTATIONS: Readonly<Record<Edition, { id: string; statemen
     'I am the supervisor designated in the signed supervision contract with this trainee and have been qualified to supervise for the entirety of the fieldwork indicated on this Final Fieldwork Verification form.',
   ] },
 };
+
+export * from './importer.js';

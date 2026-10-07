@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useBilling, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
+import { ImportHours } from './Import';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -88,6 +89,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} names={names} /></section>
         <StandardSettings me={me} />
         <BillingCard />
+        {supervisors.data && supervisors.data.length > 0 && <ImportHours me={me} supervisors={supervisors.data} />}
         <section className="card">
           <h2>Supervisors</h2>
           <ul className="people">{supervisors.data?.map(s => (

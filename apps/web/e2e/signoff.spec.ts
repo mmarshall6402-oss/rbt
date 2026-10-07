@@ -187,3 +187,22 @@ test('no code? the trainee invites their supervisor by link, who signs up and is
   await expect(page.getByRole('heading', { name: 'Log hours' })).toBeVisible(); // can log right away now
   await expect(page.getByRole('listitem').filter({ hasText: /^Una Supervisorsince/ })).toBeVisible();
 });
+
+test('imports hours from a CSV, skips bad rows, and never duplicates on re-import', async ({ page }) => {
+  const { trainee } = await seedPair();
+  const csv = 'Session Date,Time In,Time Out,Activity Type,BCBA,Notes\n' +
+    '9/1/2026,9:00 AM,11:00 AM,Independent,Lorinda Otto,Prep\n' +
+    '9/2/2026,1:00 PM,2:00 PM,Supervised,Someone Else,Observed\n' +
+    '9/3/2026,9:00,8:00,Independent,,Backwards\n';
+  const file = { name: 'ripley-export.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) };
+  await signInAs(page, trainee, '/app?month=2026-09');
+  for (let i = 0; i < 2; i++) {
+    await page.getByLabel('CSV file').setInputFiles(file);
+    await expect(page.getByText(/2\s*ready to import,\s*1\s*with problems/)).toBeVisible();
+    await expect(page.getByText(/Line 4:/)).toBeVisible();
+    await page.getByRole('button', { name: 'Import 2 entries' }).click();
+    await expect(page.getByText('✓ 2 entries saved')).toBeVisible();
+    await expect(page.locator('.sync')).toHaveText('✓ Synced');
+  }
+  expect(await call(trainee, '/entries?month=2026-09')).toHaveLength(2);
+});
