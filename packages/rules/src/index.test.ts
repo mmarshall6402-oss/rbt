@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, editionFor, evaluateMonth, evaluateProgram, findOverlaps, formatHours, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type Profile, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, formatHours, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type Profile, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
@@ -134,13 +134,12 @@ describe('2027 standard', () => {
     expect(evaluateMonth('2027-02', obs(75), C27).summary.observationMinutes).toBe(75);
   });
 
-  it('caps at 160 hours: the month still counts, hours above the cap do not', () => {
+  it('a month over 160 hours does not count (same rule wording as 2022)', () => {
     const big = [...month27(), ...Array.from({ length: 16 }, (_, i) => ind(`2027-02-${String(i + 10).padStart(2, '0')}`, '08:00', '17:00')),
       ...[26, 27].map(d => sup(`2027-02-${d}`, '06:00', '20:00'))]; // 20 + 144 + 28 = 192 h, 15.4% supervised
     const r = evaluateMonth('2027-02', big, C27);
-    expect(r.passed).toBe(true);
-    expect(r.countableMinutes).toBe(160 * 60);
-    expect(check(r, 'maxHours').label).toBe("Hours over 160 don't count");
+    expect(r.passed).toBe(false);
+    expect(check(r, 'maxHours')).toMatchObject({ ok: false, label: 'Maximum 160 hours', needed: 32 * 60 });
   });
 
   it('applies BCaBA hours and supervision', () => {
@@ -174,6 +173,21 @@ describe('evaluateProgram', () => {
     const r = evaluateProgram(heavyRestricted, C22);
     expect(r.unrestrictedPercent).toBeCloseTo(10);
     expect(r.unrestrictedOk).toBe(false);
+  });
+});
+
+describe('per verification form (one per supervisor per month)', () => {
+  const tag = (list: Entry[], supervisorId: string) => list.map(e => ({ ...e, supervisorId }));
+  it('evaluates each supervisor separately: a passing form and a failing form in the same month', () => {
+    const entries = [...tag(passingMonth(), 'sup-a'), ...tag([ind('2026-09-20', '08:00', '12:00')], 'sup-b')];
+    const forms = evaluateForms(entries, C22);
+    expect(forms.map(f => [f.supervisorId, f.passed])).toEqual([['sup-a', true], ['sup-b', false]]);
+    // Combined, the month would look fine; per form, only supervisor A's hours count.
+    expect(evaluateProgram(entries, C22).countableMinutes).toBe(1200);
+  });
+  it('groups by month and supervisor', () => {
+    const groups = groupByForm([...tag([ind('2026-09-01', '08:00', '09:00')], 'b'), ...tag([ind('2026-09-02', '08:00', '09:00')], 'a'), ...tag([ind('2026-10-01', '08:00', '09:00')], 'a')]);
+    expect(groups.map(g => `${g.month}/${g.supervisorId}`)).toEqual(['2026-09/a', '2026-09/b', '2026-10/a']);
   });
 });
 

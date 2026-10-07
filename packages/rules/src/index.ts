@@ -13,6 +13,7 @@ export interface Entry {
   restrictedMinutes: number; // remainder of the entry is unrestricted
   isGroup: boolean; // group supervision (supervised entries only)
   contact: ContactType | null; // supervised entries only
+  supervisorId?: string; // which verification form (supervision structure) the entry belongs to
 }
 
 export type Credential = 'bcba' | 'bcaba';
@@ -28,7 +29,7 @@ export interface RuleSet {
   minMonthlyMinutes: number;
   maxMonthlyMinutes: number;
   overCapPolicy: 'fail' | 'cap'; // 'cap': hours over the max don't count; 'fail': the whole month doesn't count
-  contactCounting: 'perEntry' | 'perDay'; // UNVERIFIED for 2022: how BACB counts multiple contacts in one day
+  contactCounting: 'perEntry' | 'perDay'; // Handbook: a contact is "a real-time interaction", so each one counts
   supervisionPerMille: ByCredential<number>; // 75 = 7.5% (per-mille keeps the math in integers)
   minContacts: Record<FieldworkType, number> | null; // null = not required
   observation: { unit: 'count'; min: number } | { unit: 'minutes'; min: Record<FieldworkType, number> };
@@ -44,7 +45,7 @@ export const RULESETS: Readonly<Record<Edition, RuleSet>> = {
     edition: '2022',
     minMonthlyMinutes: h(20),
     maxMonthlyMinutes: h(130),
-    overCapPolicy: 'fail', // UNVERIFIED: strict default until confirmed against the 2022 handbook
+    overCapPolicy: 'fail', // Handbook: "all requirements ... must be met for the hours to count"; >130 h breaks one
     contactCounting: 'perEntry',
     supervisionPerMille: { bcba: { supervised: 50, concentrated: 100 }, bcaba: { supervised: 50, concentrated: 100 } },
     minContacts: { supervised: 4, concentrated: 6 },
@@ -58,7 +59,7 @@ export const RULESETS: Readonly<Record<Edition, RuleSet>> = {
     edition: '2027',
     minMonthlyMinutes: h(20),
     maxMonthlyMinutes: h(160),
-    overCapPolicy: 'cap', // 2027: hours above 160 are simply not countable
+    overCapPolicy: 'fail', // 2027 Requirements use the same "maximum of 160 hours" wording as 2022's 130
     contactCounting: 'perEntry',
     supervisionPerMille: { bcba: { supervised: 50, concentrated: 75 }, bcaba: { supervised: 50, concentrated: 100 } },
     minContacts: null, // supervisory contacts are no longer required
@@ -157,6 +158,7 @@ const percentLabel = (perMille: number) => `${perMille / 10}%`;
 
 export interface MonthResult {
   month: string;
+  supervisorId?: string; // set when evaluated per verification form
   rulesVersion: string;
   summary: MonthSummary;
   checks: Check[];
@@ -197,13 +199,26 @@ export interface ProgramResult {
   complete: boolean;
 }
 
-export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet): ProgramResult {
-  const byMonth = new Map<string, Entry[]>();
+/** Groups entries into verification forms: one per month per supervisor (Handbook: requirements must be met
+ *  independently for each Monthly Fieldwork Verification Form). */
+export function groupByForm<T extends Entry>(entries: readonly T[]): { month: string; supervisorId: string | undefined; entries: T[] }[] {
+  const forms = new Map<string, { month: string; supervisorId: string | undefined; entries: T[] }>();
   for (const e of entries) {
-    const m = e.workDate.slice(0, 7);
-    byMonth.set(m, [...(byMonth.get(m) ?? []), e]);
+    const month = e.workDate.slice(0, 7), key = `${month}|${e.supervisorId ?? ''}`;
+    const f = forms.get(key) ?? { month, supervisorId: e.supervisorId, entries: [] };
+    f.entries.push(e);
+    forms.set(key, f);
   }
-  const months = [...byMonth].sort(([a], [b]) => a.localeCompare(b)).map(([m, list]) => evaluateMonth(m, list, profile, rules));
+  return [...forms.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, f]) => f);
+}
+
+/** Evaluates each verification form in a month separately. */
+export function evaluateForms(entries: readonly Entry[], profile: Profile, rules?: RuleSet): MonthResult[] {
+  return groupByForm(entries).map(f => ({ ...evaluateMonth(f.month, f.entries, profile, rules), ...(f.supervisorId ? { supervisorId: f.supervisorId } : {}) }));
+}
+
+export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet): ProgramResult {
+  const months = evaluateForms(entries, profile, rules);
   const t = targetsFor(profile, rules);
   const passing = months.filter(m => m.passed);
   const countableMinutes = passing.reduce((n, m) => n + m.countableMinutes, 0);

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { durationMinutes, evaluateMonth, findOverlaps, validateEntry, type Profile } from '@fieldtrack/rules';
+import { durationMinutes, evaluateForms, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Profile } from '@fieldtrack/rules';
 import { api, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { AppShell, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
@@ -20,12 +20,27 @@ export function TraineeDashboard({ me }: { me: Me }) {
   const supervisors = useSupervisors(), entries = useEntries(month), progress = useProgress(), verifications = useVerifications(month);
   const locked = new Set(verifications.data?.filter(v => v.supervisorSignedAt).map(v => v.supervisorId));
   // Computed on the device with the same rules the server uses: updates instantly, works offline.
-  const result = { data: entries.data ? evaluateMonth(month, entries.data, profile) : undefined, error: entries.error };
+  // BACB checks each verification form (month × supervisor) on its own, so each supervisor gets separate results.
+  const forms = entries.data ? evaluateForms(entries.data, profile) : [];
+  const [picked, setPicked] = useState<string>();
+  const form = forms.find(f => f.supervisorId === picked) ?? forms[0];
+  const result = { data: entries.data ? form ?? evaluateMonth(month, [], profile) : undefined, error: entries.error };
+  const names = Object.fromEntries((supervisors.data ?? []).map(s => [s.id, s.fullName]));
   const [editing, setEditing] = useState<EntryDto | null>(null);
 
   return (
     <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}>
       {supervisors.data?.length === 0 && <LinkSupervisor first />}
+
+      {forms.length > 1 && (
+        <div className="seg" role="radiogroup" aria-label="Verification form">
+          {forms.map(f => (
+            <button type="button" key={f.supervisorId} role="radio" aria-checked={f === form} className={f === form ? 'on' : ''} onClick={() => setPicked(f.supervisorId)}>
+              {names[f.supervisorId!] ?? 'Supervisor'}<small>{f.passed ? '✓ all met' : `✗ ${f.checks.filter(c => !c.ok).length} not met`}</small>
+            </button>
+          ))}
+        </div>
+      )}
 
       <section className="rings-row">
         {progress.data && (
@@ -48,8 +63,8 @@ export function TraineeDashboard({ me }: { me: Me }) {
         </section>
         <div className="stack">
           <section className="card">
-            <h2>{monthLabel(month)} requirements</h2>
-            <p className="muted small">{standardLabel(profile)}</p>
+            <h2>{monthLabel(month)} requirements{forms.length > 1 && form?.supervisorId && ` · ${names[form.supervisorId] ?? ''}`}</h2>
+            <p className="muted small">{standardLabel(profile)}{forms.length > 1 && ' · checked separately for each supervisor’s form'}</p>
             {result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}
           </section>
           {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} />}
@@ -64,7 +79,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
       <MonthChanges month={month} />
 
       <div className="cols">
-        <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} /></section>
+        <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} names={names} /></section>
         <StandardSettings me={me} />
         <section className="card">
           <h2>Supervisors</h2>
@@ -112,7 +127,7 @@ function EntryForm({ month, profile, supervisors, entries, editing, onDone }: { 
   const ready = d.startTime && d.endTime;
   const problems = ready ? validateEntry(input) : [];
   const preview = ready && !problems.length && input.workDate.startsWith(month)
-    ? evaluateMonth(month, [...entries.filter(e => e.id !== editing?.id), input], profile).summary : null;
+    ? evaluateMonth(month, [...entries.filter(e => e.id !== editing?.id && e.supervisorId === input.supervisorId), input], profile).summary : null; // this supervisor’s form only
 
   async function save() {
     const id = editing?.id ?? crypto.randomUUID(); // client-generated id makes uploads idempotent
@@ -156,7 +171,7 @@ function EntryForm({ month, profile, supervisors, entries, editing, onDone }: { 
       <label>Description of activity<textarea value={d.description} onChange={e => set('description', e.target.value)} maxLength={5000} rows={3} /></label>
       <p className="muted small">Use client initials only — never full names.</p>
       {problems.map(p => <p key={p} className="error">{p}</p>)}
-      {preview && <p className="notice">With this entry: <strong>{hrs(preview.totalMinutes)} h</strong> this month · <strong>{(preview.supervisedMinutes / preview.totalMinutes * 100).toFixed(1)}%</strong> supervised · {preview.contacts} contacts</p>}
+      {preview && <p className="notice">With this entry: <strong>{hrs(preview.totalMinutes)} h</strong> this month{supervisors.length > 1 ? ' with this supervisor' : ''} · <strong>{(preview.supervisedMinutes / preview.totalMinutes * 100).toFixed(1)}%</strong> supervised{targetsFor(profile).rules.minContacts && ` · ${preview.contacts} contacts`}</p>}
       <div className="row">
         <button className="primary" disabled={problems.length > 0}>{editing ? 'Save changes' : 'Save entry'}</button>
         {editing && <button type="button" className="ghost" onClick={onDone}>Cancel</button>}

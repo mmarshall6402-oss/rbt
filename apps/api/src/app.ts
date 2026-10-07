@@ -292,8 +292,12 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
     // ---- Requirements ----
     api.get('/months/:month', req => asUser(req, async (trx, user) => {
       const { month } = z.object({ month: Month }).parse(req.params);
-      const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
-      return evaluateMonth(month, await listEntries(trx, s, ...monthRange(month)), await traineeProfile(trx, s.traineeId));
+      const q = TraineeQuery.extend({ supervisorId: z.uuid().optional() }).parse(req.query);
+      const s = await scope(trx, user, q.traineeId);
+      // Requirements are met per verification form (month × supervisor), so a trainee with several supervisors must pick one.
+      const entries = await listEntries(trx, { ...s, supervisorId: s.supervisorId ?? q.supervisorId }, ...monthRange(month));
+      if (new Set(entries.map(e => e.supervisorId)).size > 1) throw new HttpError(400, 'Requirements are checked per supervisor; pass supervisorId');
+      return evaluateMonth(month, entries, await traineeProfile(trx, s.traineeId));
     }));
 
     api.get('/progress', req => asUser(req, async (trx, user) => {

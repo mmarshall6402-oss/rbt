@@ -226,6 +226,15 @@ describe.skipIf(!url)('API', () => {
     expect((await trainee.get('/months/2026-13')).statusCode).toBe(400);
   });
 
+  it('evaluates each verification form (month × supervisor) separately', async () => {
+    await trainee.log({ workDate: '2026-06-01' });
+    await trainee.log({ workDate: '2026-06-02', supervisorId: ids.sup2, endTime: '11:00' });
+    expect((await trainee.get('/months/2026-06')).json().error).toMatch(/per supervisor/);
+    expect((await trainee.get(`/months/2026-06?supervisorId=${ids.sup2}`)).json().summary.totalMinutes).toBe(180);
+    expect((await sup.get(`/months/2026-06?traineeId=${ids.trainee}&supervisorId=${ids.sup2}`)).json().summary.totalMinutes).toBe(120); // scope wins
+    expect((await trainee.get('/progress')).json().months.map((m: { supervisorId: string }) => m.supervisorId).sort()).toEqual([ids.sup, ids.sup2].sort());
+  });
+
   describe('signup', () => {
     it('creates a trainee', async () => {
       const res = await as('new@x').post('/signup', { role: 'trainee', fullName: 'New', fieldworkType: 'supervised' });

@@ -88,9 +88,10 @@ export function Checklist({ m }: { m: MonthResult }) {
 }
 
 /** Hours per month, single series, with the 20 h minimum as a reference line. */
-export function HoursTrend({ months }: { months: MonthResult[] }) {
+/** One bar per verification form (month × supervisor); limits apply to each form separately. */
+export function HoursTrend({ months, names = {} }: { months: MonthResult[]; names?: Record<string, string> }) {
   const [hover, setHover] = useState<number | null>(null);
-  const data = months.slice(-12);
+  const data = months.slice(-12), hv = hover === null ? undefined : data[hover];
   if (!data.length) return <p className="muted">Your monthly totals will appear here.</p>;
   const W = 600, H = 180, pad = { l: 36, r: 8, t: 12, b: 24 };
   const max = Math.max(25, ...data.map(m => m.summary.totalMinutes / 60)) * 1.1;
@@ -105,7 +106,7 @@ export function HoursTrend({ months }: { months: MonthResult[] }) {
         {data.map((m, i) => {
           const h = m.summary.totalMinutes / 60, x = pad.l + i * bw + 2, w = Math.max(bw - 4, 2), top = y(h), base = y(0), r = Math.min(4, w / 2, base - top);
           return (
-            <g key={m.month} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+            <g key={`${m.month}|${m.supervisorId ?? ''}`} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
               <rect x={pad.l + i * bw} y={pad.t} width={bw} height={H - pad.t - pad.b} fill="transparent" />
               {h > 0 && <path className={m.passed ? 'bar' : 'bar bar-fail'} d={`M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + w - r} Q${x + w},${top} ${x + w},${top + r} V${base} Z`} />}
               <text x={x + w / 2} y={H - 6} className="axis" textAnchor="middle">{monthLabel(m.month, true).split(' ')[0]}</text>
@@ -113,10 +114,10 @@ export function HoursTrend({ months }: { months: MonthResult[] }) {
           );
         })}
       </svg>
-      {hover !== null && data[hover] && (
-        <div className="tooltip" style={{ left: `${((pad.l + (hover + 0.5) * bw) / W) * 100}%` }}>
-          <strong>{monthLabel(data[hover]!.month)}</strong>
-          <span>{hrs(data[hover]!.summary.totalMinutes)} h · {data[hover]!.passed ? '✓ counts' : '✗ does not count'}</span>
+      {hv && (
+        <div className="tooltip" style={{ left: `${((pad.l + (hover! + 0.5) * bw) / W) * 100}%` }}>
+          <strong>{monthLabel(hv.month)}{hv.supervisorId && names[hv.supervisorId] ? ` · ${names[hv.supervisorId]}` : ''}</strong>
+          <span>{hrs(hv.summary.totalMinutes)} h · {hv.passed ? '✓ counts' : '✗ does not count'}</span>
         </div>
       )}
     </div>

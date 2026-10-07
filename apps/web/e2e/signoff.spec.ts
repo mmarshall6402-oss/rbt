@@ -68,3 +68,22 @@ test('supervisor only sees hours logged under them', async ({ page }) => {
   expect(res.error).toBe('Not found');
   void sup;
 });
+
+test('each supervisor’s form is checked on its own', async ({ page }) => {
+  const { trainee } = await seedPair();
+  const second = await seedPair(); // borrow its supervisor
+  await call(trainee, '/supervisions', 'POST', { inviteCode: second.inviteCode, startsOn: '2026-01-01' });
+  const [a, b] = await call(trainee, '/supervisors');
+  const put = (supervisorId: string, workDate: string, endTime: string) =>
+    call(trainee, `/entries/${crypto.randomUUID()}`, 'PUT', { supervisorId, workDate, startTime: '08:00', endTime, kind: 'independent' });
+  await put(a.id, '2026-09-01', '20:00');
+  await put(a.id, '2026-09-02', '20:00'); // 24 h under A
+  await put(b.id, '2026-09-03', '10:00'); // 2 h under B: below the 20 h minimum on B's form
+  await signInAs(page, trainee, '/app?month=2026-09');
+  const tabs = page.getByRole('radiogroup', { name: 'Verification form' }).getByRole('radio');
+  await expect(tabs).toHaveCount(2);
+  await tabs.nth(1).click();
+  await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(1);
+  await tabs.nth(0).click();
+  await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(0);
+});
