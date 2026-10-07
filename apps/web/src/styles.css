@@ -160,3 +160,8 @@ label.check input { width: auto; }
 .comments { gap: 6px; }
 .comment { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .comment.resolved { color: var(--muted); }
+.help { max-width: 860px; margin: 0 auto; }
+.help h1 { margin-bottom: 4px; }
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.steps li.done { color: var(--muted); text-decoration: line-through; }
+.steps li > span { display: inline-block; width: 1.2em; font-weight: 700; }

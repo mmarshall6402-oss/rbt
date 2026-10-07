@@ -88,7 +88,7 @@ export function Landing() {
       </section>
 
       <footer className="footer muted small">
-        <span>© {new Date().getFullYear()} Fieldtrack</span>
+        <span>© {new Date().getFullYear()} Fieldtrack · <Link to="/help">How it works</Link></span>
         <span>Not affiliated with or endorsed by the Behavior Analyst Certification Board.</span>
       </footer>
     </div>

@@ -179,6 +179,7 @@ export function AppShell({ name, children, nav }: { name: string; nav?: ReactNod
         <Link to="/" className="brand">Fieldtrack</Link>
         {nav}
         <div className="topbar-right">
+          <Link to="/help" className="muted small">Help</Link>
           <ThemeToggle />
           <span className="muted hide-sm">{name}</span>
           <button className="ghost" onClick={() => void safeSignOut()}>Sign out</button>

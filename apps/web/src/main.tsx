@@ -7,6 +7,7 @@ import { Landing } from './pages/Landing';
 import { Login, AuthCallback } from './pages/Login';
 import { Signup } from './pages/Signup';
 import { Invite } from './pages/Invite';
+import { Help } from './pages/Help';
 import { TraineeDashboard } from './pages/Trainee';
 import { SupervisorDashboard, TraineeReview } from './pages/Supervisor';
 import { persistOptions, queryClient } from './query';
@@ -48,6 +49,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/signup" element={<Signup />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="/invite/:token" element={<Invite />} />
+          <Route path="/help" element={<Help />} />
           <Route path="/app" element={<RequireUser role="trainee">{me => <TraineeDashboard me={me} />}</RequireUser>} />
           <Route path="/supervise" element={<RequireUser role="supervisor">{me => <SupervisorDashboard me={me} />}</RequireUser>} />
           <Route path="/supervise/:traineeId" element={<RequireUser role="supervisor">{me => <TraineeReview me={me} />}</RequireUser>} />

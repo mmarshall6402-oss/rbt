@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useBilling, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
@@ -37,6 +37,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
   return (
     <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}>
       {supervisors.data?.length === 0 && <LinkSupervisor first />}
+      <GettingStarted me={me} linked={!!supervisors.data?.length} logged={!!progress.data?.months.length || !!entries.data?.length} />
 
       {forms.length > 1 && (
         <div className="seg" role="radiogroup" aria-label="Verification form">
@@ -448,6 +449,23 @@ function BillingCard() {
         {active ? 'Manage billing' : b.status === 'canceled' ? 'Resubscribe' : 'Upgrade to Pro'}
       </button>
       <ErrorText error={go.error} />
+    </section>
+  );
+}
+
+/** First-run checklist; disappears once everything's done. */
+function GettingStarted({ me, linked, logged }: { me: Me; linked: boolean; logged: boolean }) {
+  const steps = [
+    { done: linked, label: 'Link your supervisor (invite code, or send them a link)' },
+    { done: logged, label: 'Log your first hours (or import them from a spreadsheet)' },
+    { done: !!(me.bacbId && me.fieldworkState && me.fieldworkCountry), label: 'Add your BACB ID, state and country for your forms (Settings, below)' },
+  ];
+  if (steps.every(s => s.done)) return null;
+  return (
+    <section className="card stack">
+      <h2>Getting started</h2>
+      <ol className="steps">{steps.map(s => <li key={s.label} className={s.done ? 'done' : ''}><span>{s.done ? '✓' : '○'}</span> {s.label}</li>)}</ol>
+      <p className="muted small">New to how the BACB checks hours? <Link to="/help">Read the 2-minute guide</Link>.</p>
     </section>
   );
 }

@@ -14,7 +14,7 @@ test('production security headers are served and no page violates the CSP', asyn
   const { sup, trainee } = await seedPair();
   const [s] = await call(trainee, '/supervisors');
   await call(trainee, `/entries/${crypto.randomUUID()}`, 'PUT', { supervisorId: s.id, workDate: '2026-09-02', startTime: '09:00', endTime: '10:00', kind: 'independent' });
-  for (const [who, path] of [[trainee, '/app?month=2026-09'], [sup, '/supervise?month=2026-09'], [trainee, '/signup'], [trainee, '/login']] as const) {
+  for (const [who, path] of [[trainee, '/app?month=2026-09'], [sup, '/supervise?month=2026-09'], [trainee, '/signup'], [trainee, '/login'], [trainee, '/help']] as const) {
     await signInAs(page, who, path);
     await page.waitForLoadState('networkidle');
   }

@@ -12,7 +12,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
   test.describe(`accessibility (${colorScheme})`, () => {
     test.use({ colorScheme });
     test('landing, signup and login', async ({ page }) => {
-      for (const path of ['/', '/signup', '/signup?role=supervisor', '/login']) {
+      for (const path of ['/', '/signup', '/signup?role=supervisor', '/login', '/help']) {
         await page.goto(path);
         await page.waitForLoadState('networkidle');
         await audit(page);
