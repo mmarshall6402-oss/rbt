@@ -103,7 +103,7 @@ jobs:
       - run: pnpm db:migrate
       - run: pnpm --filter @fieldtrack/web exec playwright install --with-deps chromium
       - run: pnpm --filter @fieldtrack/web e2e
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: failure()
         with: { name: playwright-traces, path: apps/web/test-results, retention-days: 7 }
 
@@ -140,7 +140,7 @@ jobs:
             zap-baseline.py -t http://localhost:4173 -c rules.tsv -r report.html -J report.json -j || code=$?
           # 1 = a FAIL rule fired; 2 = warnings only (reported, not blocking)
           [ "${code:-0}" -ne 1 ] && [ "${code:-0}" -ne 3 ]
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with: { name: zap-report, path: zap, retention-days: 14 }
 
