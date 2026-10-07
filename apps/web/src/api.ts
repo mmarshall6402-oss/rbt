@@ -19,7 +19,7 @@ export interface Person { id: string; fullName: string; email: string; startsOn:
 export interface Supervisor extends Person { bacbId: string | null }
 export interface Trainee extends Person { fieldworkType: FieldworkType | null; credential: Credential | null; rulesEdition: Edition | null }
 export interface FinalVerification { id: string; traineeId: string; supervisorId: string; supervisorSignedAt: string }
-export interface Verification { id: string; traineeId: string; supervisorId: string; month: string; rulesVersion: string; traineeSignedAt: string | null; supervisorSignedAt: string | null }
+export interface Verification { id: string; traineeId: string; supervisorId: string; month: string; fieldworkType: FieldworkType; rulesVersion: string; traineeSignedAt: string | null; supervisorSignedAt: string | null }
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message) }

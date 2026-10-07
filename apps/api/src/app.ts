@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type FormType, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
@@ -182,6 +182,14 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
     return evaluateMonth(month, await listEntries(trx, { traineeId, supervisorId }, ...monthRange(month)), await traineeProfile(trx, traineeId));
   }
 
+  /** Locked (supervisor-signed) forms keep the fieldwork type they were signed under; others follow the trainee's setting. */
+  async function signedFormTypes(trx: Trx, traineeId: string): Promise<FormType> {
+    const rows = await trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'fieldworkType'])
+      .where('traineeId', '=', traineeId).where('supervisorSignedAt', 'is not', null).execute();
+    const types = new Map(rows.map(r => [`${r.month.slice(0, 7)}|${r.supervisorId}`, r.fieldworkType]));
+    return (month, supervisorId) => types.get(`${month}|${supervisorId}`);
+  }
+
   /** What a Final Fieldwork Verification Form reports for a pair: totals from their signed (locked) monthly forms, by fieldwork type. */
   async function finalSummary(trx: Trx, traineeId: string, supervisorId: string) {
     const months = await trx.selectFrom('monthVerifications').select(['month', 'fieldworkType', 'summary'])
@@ -326,7 +334,7 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
           trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'supervisorSignedAt']).where('traineeId', '=', s.traineeId).where('supervisorSignedAt', 'is not', null)
             .$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).execute(),
         ]);
-        const program = evaluateProgram(entries, profile);
+        const program = evaluateProgram(entries, profile, undefined, await signedFormTypes(trx, s.traineeId));
         return hoursLogPdf({
           trainee: { name: t.fullName, bacbId: t.bacbId }, entries, forms: program.months,
           standard: `${profile.credential?.toUpperCase()} · ${profile.type === 'concentrated' ? 'Concentrated' : 'Supervised'} · ${profile.edition} rules`,
@@ -425,19 +433,20 @@ export function buildApp({ db, verify, logger = true, billing }: { db: Kysely<DB
       // Requirements are met per verification form (month × supervisor), so a trainee with several supervisors must pick one.
       const entries = await listEntries(trx, { ...s, supervisorId: s.supervisorId ?? q.supervisorId }, ...monthRange(month));
       if (new Set(entries.map(e => e.supervisorId)).size > 1) throw new HttpError(400, 'Requirements are checked per supervisor; pass supervisorId');
-      return evaluateMonth(month, entries, await traineeProfile(trx, s.traineeId));
+      const profile = await traineeProfile(trx, s.traineeId), signedType = entries[0] && (await signedFormTypes(trx, s.traineeId))(month, entries[0].supervisorId);
+      return evaluateMonth(month, entries, signedType ? { ...profile, type: signedType } : profile);
     }));
 
     api.get('/progress', req => asUser(req, async (trx, user) => {
       const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
-      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId));
+      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId), undefined, await signedFormTypes(trx, s.traineeId));
     }));
 
     // ---- Monthly sign-off: trainee signs, then supervisor signs (which locks the month) ----
     api.get('/verifications', req => asUser(req, async (trx, user) => {
       const { month, traineeId } = z.object({ month: Month }).extend(TraineeQuery.shape).parse(req.query);
       const s = await scope(trx, user, traineeId);
-      return trx.selectFrom('monthVerifications').select(['id', 'traineeId', 'supervisorId', 'month', 'rulesVersion', 'attestation', 'traineeSignedAt', 'supervisorSignedAt'])
+      return trx.selectFrom('monthVerifications').select(['id', 'traineeId', 'supervisorId', 'month', 'fieldworkType', 'rulesVersion', 'attestation', 'traineeSignedAt', 'supervisorSignedAt'])
         .where('traineeId', '=', s.traineeId).where('month', '=', `${month}-01`).$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).execute();
     }));
 

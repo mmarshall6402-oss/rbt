@@ -235,3 +235,24 @@ describe('planFor', () => {
     expect(planFor(p, C22, '2026-10', '2026-09')).toBeNull();
   });
 });
+
+describe('mixed fieldwork types (Handbook: one type per month per supervision structure)', () => {
+  // A month that passes under either 2027 type and credential: 20 h independent + 3 h supervised observation (13%)
+  const month = (m: string) => [ind(`${m}-01`, '08:00', '18:00'), ind(`${m}-02`, '08:00', '18:00'), sup(`${m}-03`, '09:00', '12:00', { contact: 'observation' })];
+  const entries = [...month('2026-08'), ...month('2026-09')];
+  const augSupervised = (m: string) => (m === '2026-08' ? 'supervised' as const : undefined);
+
+  it('evaluates each form under its own type', () => {
+    expect(evaluateForms(entries, C27, undefined, augSupervised).map(f => [f.month, f.type, f.passed])).toEqual([['2026-08', 'supervised', true], ['2026-09', 'concentrated', true]]);
+  });
+  it('mixed: concentrated hours × 1.33 plus supervised hours count toward the supervised total', () => {
+    const p = evaluateProgram(entries, C27, undefined, augSupervised);
+    expect(p).toMatchObject({ mixed: 'bcba', countableByType: { supervised: 1380, concentrated: 1380 }, countableMinutes: 1380 + Math.floor(1380 * 1.33), requiredMinutes: 2000 * 60 });
+  });
+  it('one type: plain totals against that type', () => {
+    expect(evaluateProgram(entries, C27)).toMatchObject({ mixed: false, countableMinutes: 2760, requiredMinutes: 1500 * 60 });
+  });
+  it('BCaBA mixing is flagged as an estimate (the 1.33 rule is published for BCBA)', () => {
+    expect(evaluateProgram(entries, { ...C27, credential: 'bcaba' }, undefined, augSupervised).mixed).toBe('estimate');
+  });
+});

@@ -159,6 +159,7 @@ const percentLabel = (perMille: number) => `${perMille / 10}%`;
 export interface MonthResult {
   month: string;
   supervisorId?: string; // set when evaluated per verification form
+  type?: FieldworkType; // the form's fieldwork type
   rulesVersion: string;
   summary: MonthSummary;
   checks: Check[];
@@ -192,7 +193,9 @@ export function evaluateMonth(month: string, entries: readonly Entry[], profile:
 
 export interface ProgramResult {
   months: MonthResult[];
-  countableMinutes: number;
+  countableMinutes: number; // with mixed fieldwork types, concentrated hours are weighted by 1.33
+  countableByType: Record<FieldworkType, number>; // actual hours, as reported on the forms
+  mixed: false | 'bcba' | 'estimate';
   requiredMinutes: number;
   unrestrictedPercent: number; // across passing months
   unrestrictedOk: boolean;
@@ -212,21 +215,39 @@ export function groupByForm<T extends Entry>(entries: readonly T[]): { month: st
   return [...forms.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, f]) => f);
 }
 
-/** Evaluates each verification form in a month separately. */
-export function evaluateForms(entries: readonly Entry[], profile: Profile, rules?: RuleSet): MonthResult[] {
-  return groupByForm(entries).map(f => ({ ...evaluateMonth(f.month, f.entries, profile, rules), ...(f.supervisorId ? { supervisorId: f.supervisorId } : {}) }));
+/**
+ * Fieldwork type of one verification form. Handbook: "Hours can only be accrued under one fieldwork type per month,
+ * per supervision structure." Signed forms keep the type they were signed with; others follow the trainee's setting.
+ */
+export type FormType = (month: string, supervisorId: string | undefined) => FieldworkType | undefined;
+
+/** Evaluates each verification form in a month separately, each under its own fieldwork type. */
+export function evaluateForms(entries: readonly Entry[], profile: Profile, rules?: RuleSet, typeOf?: FormType): MonthResult[] {
+  return groupByForm(entries).map(f => {
+    const type = typeOf?.(f.month, f.supervisorId) ?? profile.type;
+    return { ...evaluateMonth(f.month, f.entries, { ...profile, type }, rules), type, ...(f.supervisorId ? { supervisorId: f.supervisorId } : {}) };
+  });
 }
 
-export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet): ProgramResult {
-  const months = evaluateForms(entries, profile, rules);
-  const t = targetsFor(profile, rules);
+/** Handbook, "Combining Fieldwork Types": concentrated hours × 1.33 plus supervised hours must reach the supervised total (BCBA). */
+export const MIXED_CONCENTRATED_MULTIPLIER = 1.33;
+
+export function evaluateProgram(entries: readonly Entry[], profile: Profile, rules?: RuleSet, typeOf?: FormType): ProgramResult {
+  const months = evaluateForms(entries, profile, rules, typeOf);
   const passing = months.filter(m => m.passed);
-  const countableMinutes = passing.reduce((n, m) => n + m.countableMinutes, 0);
+  const byType = { supervised: 0, concentrated: 0 };
+  for (const m of passing) byType[m.type!] += m.countableMinutes;
+  const mixed = byType.supervised > 0 && byType.concentrated > 0;
+  // Mixed hours count toward the Supervised Fieldwork total, with concentrated hours weighted (only for this sum).
+  const t = targetsFor(mixed ? { ...profile, type: 'supervised' } : profile, rules);
+  const countableMinutes = mixed ? byType.supervised + Math.floor(byType.concentrated * MIXED_CONCENTRATED_MULTIPLIER) : byType.supervised + byType.concentrated;
   const total = passing.reduce((n, m) => n + m.summary.totalMinutes, 0);
   const unres = passing.reduce((n, m) => n + m.summary.unrestrictedMinutes, 0);
   const unrestrictedOk = unres * 100 >= t.rules.minUnrestrictedPercent * total;
   return {
-    months, countableMinutes, requiredMinutes: t.requiredMinutes,
+    months, countableMinutes, requiredMinutes: t.requiredMinutes, countableByType: byType,
+    // The 1.33 rule is published in the BCBA Handbook; for BCaBA it's an estimate until confirmed with the BACB.
+    mixed: mixed ? (t.credential === 'bcba' ? 'bcba' : 'estimate') : false,
     unrestrictedPercent: total ? (unres / total) * 100 : 0, unrestrictedOk,
     complete: countableMinutes >= t.requiredMinutes && unrestrictedOk,
   };

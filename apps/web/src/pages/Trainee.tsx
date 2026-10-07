@@ -27,7 +27,9 @@ export function TraineeDashboard({ me }: { me: Me }) {
   const locked = new Set(verifications.data?.filter(v => v.supervisorSignedAt).map(v => v.supervisorId));
   // Computed on the device with the same rules the server uses: updates instantly, works offline.
   // BACB checks each verification form (month × supervisor) on its own, so each supervisor gets separate results.
-  const forms = entries.data ? evaluateForms(entries.data, profile) : [];
+  // Signed forms keep the fieldwork type they were signed under.
+  const signedType = (_m: string, sid: string | undefined) => verifications.data?.find(v => v.supervisorId === sid && v.supervisorSignedAt)?.fieldworkType;
+  const forms = entries.data ? evaluateForms(entries.data, profile, undefined, signedType) : [];
   const [picked, setPicked] = useState<string>();
   const form = forms.find(f => f.supervisorId === picked) ?? forms[0];
   const result = { data: entries.data ? form ?? evaluateMonth(month, [], profile) : undefined, error: entries.error };
@@ -58,7 +60,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
               label="Unrestricted (60%)" sub="Across counted months" ok={progress.data.countableMinutes ? progress.data.unrestrictedOk : undefined} />
           </>
         )}
-        {result.data && <MonthRings m={result.data} profile={profile} />}
+        {result.data && <MonthRings m={result.data} profile={{ ...profile, type: result.data.type ?? profile.type }} />}
       </section>
       {progress.data && <Pace program={progress.data} profile={profile} />}
 
@@ -387,10 +389,17 @@ function StandardSettings({ me }: { me: Me }) {
 function Pace({ program, profile }: { program: ProgramResult; profile: Profile }) {
   const [target, setTarget] = useState(() => { try { return localStorage.getItem('ft.finishBy') ?? '' } catch { return '' } });
   if (program.complete) return <p className="notice">🎉 You've met the fieldwork hours. Keep your signed forms for 7 years.</p>;
+  const mixedNote = program.mixed && (
+    <p className={program.mixed === 'estimate' ? 'notice' : 'muted small center-text'}>
+      Mixed fieldwork: {Math.floor(program.countableByType.supervised / 60)} supervised + {Math.floor(program.countableByType.concentrated / 60)} concentrated hours. Per the BACB, concentrated hours count ×1.33 toward the supervised total (forms still show actual hours).
+      {program.mixed === 'estimate' && ' The BACB publishes this rule for BCBA; confirm BCaBA totals with the BACB.'}
+    </p>
+  );
   const now = currentMonth(), f = forecast(program, now), plan = target ? planFor(program, profile, now, target) : null;
   const pick = (v: string) => { setTarget(v); try { localStorage.setItem('ft.finishBy', v) } catch { /* private mode */ } };
   return (
     <div className="pace muted small center-text">
+      {mixedNote}
       <p>{f ? <>At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</> : 'Your projected finish date appears after your first fully countable month.'}</p>
       <p>
         <label className="inline">Want to finish by <input type="month" min={now} value={target} onChange={e => pick(e.target.value)} /></label>

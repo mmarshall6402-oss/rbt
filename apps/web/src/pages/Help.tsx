@@ -43,6 +43,7 @@ export function Help() {
         <p>The BACB checks requirements <strong>separately for each Monthly Fieldwork Verification Form</strong>, which means each supervisor's hours in a month stand on their own. A month that misses any requirement doesn't count at all, so Fieldtrack shows one result per supervisor.</p>
         {(['2027', '2022'] as const).map(e => (['bcba', 'bcaba'] as const).map(c => <Requirements key={e + c} edition={e} credential={c} />))}
         <p className="muted small">Unrestricted share is checked across all your counted months, not month by month.</p>
+        <p><strong>Switching fieldwork type.</strong> Each monthly form has one fieldwork type. Your setting applies to months that aren't signed yet; signed months keep the type they were signed under. If you mix types, the BACB adds your supervised hours to your concentrated hours × 1.33, and that total must reach 2,000 (BCBA). Forms always show the actual hours.</p>
       </section>
 
       <section className="card stack">

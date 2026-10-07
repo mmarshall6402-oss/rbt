@@ -254,6 +254,18 @@ describe.skipIf(!url)('API', () => {
     expect((await trainee.get('/progress')).json().months.map((m: { supervisorId: string }) => m.supervisorId).sort()).toEqual([ids.sup, ids.sup2].sort());
   });
 
+  it('signed months keep their fieldwork type; switching type later makes the program mixed', async () => {
+    await trainee.log({ workDate: '2026-09-01', startTime: '00:00', endTime: '22:00' });
+    await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
+    await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true });
+    await trainee.patch('/me', { fieldworkType: 'supervised' });
+    await trainee.log({ workDate: '2026-10-01', startTime: '00:00', endTime: '22:00' });
+    const p = (await trainee.get('/progress')).json();
+    expect(p.months.map((m: { month: string; type: string }) => [m.month, m.type])).toEqual([['2026-09', 'concentrated'], ['2026-10', 'supervised']]);
+    expect((await trainee.get('/months/2026-09')).json().checks.find((c: { id: string }) => c.id === 'contacts').label).toMatch(/6/); // still the concentrated standard
+    expect((await trainee.get('/verifications?month=2026-09')).json()[0].fieldworkType).toBe('concentrated');
+  });
+
   describe('signup', () => {
     it('creates a trainee', async () => {
       const res = await as('new@x').post('/signup', { role: 'trainee', fullName: 'New', fieldworkType: 'supervised' });
