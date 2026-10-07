@@ -178,6 +178,22 @@ describe.skipIf(!url)('API', () => {
     });
   });
 
+  describe('least-privilege API login', () => {
+    const apiUrl = () => { const u = new URL(url!); u.username = 'fieldtrack_api'; u.password = 'test-only'; return u.toString() };
+    it('can do nothing until it becomes the restricted role, and the whole API runs on it', async () => {
+      await sql`alter role fieldtrack_api password 'test-only'`.execute(db);
+      const apiDb = createDb(apiUrl());
+      try {
+        await expect(sql`select id from users`.execute(apiDb)).rejects.toThrow(/permission denied|does not exist/); // can't even see the schema
+        await expect(sql`set role postgres`.execute(apiDb)).rejects.toMatchObject({ code: '42501' });
+        const api = buildApp({ db: apiDb, verify: devVerify(), logger: false });
+        const headers = { 'x-dev-sub': 'trainee' };
+        expect((await api.inject({ method: 'GET', url: '/api/me', headers })).statusCode).toBe(200);
+        expect((await api.inject({ method: 'PUT', url: `/api/entries/${randomUUID()}`, headers, payload: entry() })).statusCode).toBe(201);
+      } finally { await apiDb.destroy() }
+    });
+  });
+
   describe('database security (row-level security, enforced by Postgres)', () => {
     it('supervisors only see entries dated inside their active supervision period', async () => {
       await trainee.log({ supervisorId: ids.sup2, workDate: '2026-06-15' });

@@ -35,7 +35,6 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
 
 resource "aws_db_instance" "main" {
   #checkov:skip=CKV_AWS_157:Multi-AZ is set per environment (on in prod) via var.db_multi_az
-  #checkov:skip=CKV_AWS_161:password auth with an RDS-managed, rotated secret; IAM auth tokens are a later hardening step
   identifier     = local.prefix
   engine         = "postgres"
   engine_version = "16"
@@ -46,6 +45,8 @@ resource "aws_db_instance" "main" {
   # Password generated and rotated by RDS in Secrets Manager; never in Terraform state or env files.
   manage_master_user_password   = true
   master_user_secret_kms_key_id = aws_kms_key.main.arn
+  # The API signs in as fieldtrack_api with short-lived IAM tokens (db/migrations/007); only migrations use the owner.
+  iam_database_authentication_enabled = true
 
   allocated_storage     = 20
   max_allocated_storage = 200

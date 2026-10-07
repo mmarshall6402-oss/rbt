@@ -39,6 +39,8 @@ Terraform in `terraform/` builds one environment per folder in `terraform/envs/`
 
 Migrations run with a 5-second lock timeout, so a migration that would block live traffic fails instead.
 
+**Database logins.** Migrations run as the RDS owner (password in Secrets Manager, readable only by the task execution role). The API never gets that password: it signs in as `fieldtrack_api` with 15-minute IAM tokens (`rds-db:connect` on the task role). That login has no privileges except switching to the row-level-security role per request (`db/migrations/007_api_login.sql`). Migrations always run before the new API rolls out, so the login exists before anything uses it.
+
 ## Recovering from a bad change (point-in-time restore)
 
 ```sh
@@ -51,6 +53,5 @@ aws rds restore-db-instance-to-point-in-time \
 Verify the restored data, then point the API at it (or copy the affected rows back). Practice this once before launch.
 
 ## Known follow-ups
-- Dedicated least-privilege database login for the API (it currently connects as the owner and drops to the row-level-security role per request).
 - Cross-region copies of backups and records for disaster recovery.
 - SES for Cognito email (the default sender is limited to 50 emails/day).

@@ -77,6 +77,7 @@ resource "aws_iam_role_policy" "task" {
     Statement = [
       { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.records.arn}/*" },
       { Effect = "Allow", Action = ["kms:GenerateDataKey", "kms:Decrypt"], Resource = aws_kms_key.main.arn },
+      { Effect = "Allow", Action = "rds-db:connect", Resource = "arn:aws:rds-db:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_db_instance.main.resource_id}/fieldtrack_api" },
     ]
   })
 }
@@ -84,32 +85,49 @@ resource "aws_iam_role_policy" "task" {
 # ---- Task definitions (the deploy pipeline registers new revisions with each image tag) ----
 locals {
   db_secret = aws_db_instance.main.master_user_secret[0].secret_arn
-  api_container = {
-    name                   = "api"
+  base_container = {
     image                  = "${aws_ecr_repository.api.repository_url}:bootstrap"
     essential              = true
     readonlyRootFilesystem = true
     user                   = "node"
-    portMappings           = [{ containerPort = 3000, protocol = "tcp" }]
-    environment = [
-      { name = "APP_ENV", value = var.env },
-      { name = "PORT", value = "3000" },
-      { name = "DB_HOST", value = aws_db_instance.main.address },
-      { name = "DB_NAME", value = aws_db_instance.main.db_name },
-      { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
-      { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.web.id },
-      { name = "RECORDS_BUCKET", value = aws_s3_bucket.records.bucket },
-    ]
-    secrets = [
-      { name = "DB_USER", valueFrom = "${local.db_secret}:username::" },
-      { name = "DB_PASSWORD", valueFrom = "${local.db_secret}:password::" },
-      { name = "SENTRY_DSN", valueFrom = aws_secretsmanager_secret.sentry_dsn.arn },
-    ]
     logConfiguration = {
       logDriver = "awslogs"
       options   = { awslogs-group = aws_cloudwatch_log_group.api.name, awslogs-region = data.aws_region.current.region, awslogs-stream-prefix = "api" }
     }
   }
+  base_env = [
+    { name = "APP_ENV", value = var.env },
+    { name = "DB_HOST", value = aws_db_instance.main.address },
+    { name = "DB_NAME", value = aws_db_instance.main.db_name },
+  ]
+  # The API never sees the owner password: it connects as the least-privilege fieldtrack_api login with IAM tokens.
+  api_container = merge(local.base_container, {
+    name         = "api"
+    portMappings = [{ containerPort = 3000, protocol = "tcp" }]
+    environment = concat(local.base_env, [
+      { name = "PORT", value = "3000" },
+      { name = "DB_USER", value = "fieldtrack_api" },
+      { name = "DB_IAM_AUTH", value = "true" },
+      { name = "COGNITO_USER_POOL_ID", value = aws_cognito_user_pool.main.id },
+      { name = "COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.web.id },
+      { name = "RECORDS_BUCKET", value = aws_s3_bucket.records.bucket },
+    ])
+    secrets = [{ name = "SENTRY_DSN", valueFrom = aws_secretsmanager_secret.sentry_dsn.arn }]
+  })
+  # Migrations run as the owner (schema changes need it).
+  migrate_container = merge(local.base_container, {
+    name         = "migrate"
+    command      = ["node", "dist/migrate.js"]
+    portMappings = []
+    environment  = local.base_env
+    secrets = [
+      { name = "DB_USER", valueFrom = "${local.db_secret}:username::" },
+      { name = "DB_PASSWORD", valueFrom = "${local.db_secret}:password::" },
+    ]
+    logConfiguration = merge(local.base_container.logConfiguration, {
+      options = merge(local.base_container.logConfiguration.options, { awslogs-stream-prefix = "migrate" })
+    })
+  })
 }
 
 resource "aws_ecs_task_definition" "api" {
@@ -139,14 +157,7 @@ resource "aws_ecs_task_definition" "migrate" {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
   }
-  container_definitions = jsonencode([merge(local.api_container, {
-    name         = "migrate"
-    command      = ["node", "dist/migrate.js"]
-    portMappings = []
-    logConfiguration = merge(local.api_container.logConfiguration, {
-      options = merge(local.api_container.logConfiguration.options, { awslogs-stream-prefix = "migrate" })
-    })
-  })])
+  container_definitions = jsonencode([local.migrate_container])
 }
 
 # ---- Load balancer: reachable only from CloudFront, and only with the shared origin secret ----

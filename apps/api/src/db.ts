@@ -82,5 +82,5 @@ export interface DB {
 
 export type User = Selectable<DB['users']>;
 
-export const createDb = (connectionString: string) =>
-  new Kysely<DB>({ dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString, max: 10 }) }), plugins: [new CamelCasePlugin()] });
+export const createDb = (conn: string | pg.PoolConfig) =>
+  new Kysely<DB>({ dialect: new PostgresDialect({ pool: new pg.Pool({ ...(typeof conn === 'string' ? { connectionString: conn } : conn), max: 10 }) }), plugins: [new CamelCasePlugin()] });
