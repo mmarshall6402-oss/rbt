@@ -6,6 +6,7 @@ import { buildApp } from './app.js';
 import { devVerify } from './auth.js';
 import { createDb } from './db.js';
 import { migrate } from './migrate.js';
+import { sendReminders } from './reminders.js';
 
 // Requires a throwaway database: TEST_DATABASE_URL=postgres://... (the schema is dropped and recreated)
 const url = process.env.TEST_DATABASE_URL;
@@ -291,7 +292,7 @@ describe.skipIf(!url)('API', () => {
       expect((await trainee.patch('/me', {})).statusCode).toBe(400);
       expect((await trainee.patch('/me', { role: 'supervisor' })).statusCode).toBe(400); // unknown keys are stripped → nothing to update
       expect((await trainee.get('/me')).json().role).toBe('trainee');
-      expect((await sup.patch('/me', { rulesEdition: '2027' })).statusCode).toBe(403);
+      expect((await sup.patch('/me', { rulesEdition: '2027' })).statusCode).toBe(400); // supervisors may only change their reminder setting
     });
     it('signed months keep the rules they were signed under', async () => {
       await trainee.log();
@@ -381,6 +382,40 @@ describe.skipIf(!url)('API', () => {
     expect((await sup.get(`/entries/export.pdf?traineeId=${ids.trainee}`)).statusCode).toBe(200);
     expect((await sup2.get(`/entries/export.pdf?traineeId=${ids.other}`)).statusCode).toBe(404);
     if (process.env.HOURS_LOG_OUT) (await import('node:fs')).writeFileSync(process.env.HOURS_LOG_OUT, res.rawPayload);
+  });
+
+  describe('deadline reminder emails', () => {
+    const outbox: { to: string; subject: string; text: string }[] = [];
+    const run = (today: string) => sendReminders(db, async (to, subject, text) => { outbox.push({ to, subject, text }) }, today, 'https://app.test');
+    beforeEach(() => { outbox.length = 0 });
+
+    it('emails a week out and two days out, once each, and never about client details', async () => {
+      await trainee.log({ description: 'Client J.D. session' });
+      expect(await run('2026-10-20')).toBe(0); // 11 days left
+      expect(await run('2026-10-25')).toBe(1);
+      expect(outbox[0]).toMatchObject({ to: 't@x', subject: 'Sign your September 2026 fieldwork form by October 31' });
+      expect(outbox[0]!.text).toContain('https://app.test/app?month=2026-09');
+      expect(outbox[0]!.text).not.toContain('J.D.');
+      expect(await run('2026-10-26')).toBe(0); // already sent this window
+      await trainee.post('/verifications/2026-09/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
+      expect(await run('2026-10-30')).toBe(1); // final window: now the supervisor's turn
+      expect(outbox[1]).toMatchObject({ to: 's@x', subject: '1 fieldwork form is waiting for your signature' });
+      expect(await run('2026-11-02')).toBe(0); // past the deadline: no more reminders
+    });
+
+    it('supervisors can turn reminders off, but change nothing else about themselves', async () => {
+      expect((await sup.patch('/me', { emailReminders: false })).json().emailReminders).toBe(false);
+      expect((await sup.patch('/me', { rulesEdition: '2027' })).statusCode).toBe(400);
+      expect((await sup.patch('/me', {})).statusCode).toBe(400);
+    });
+    it('respects the opt-out, and retries a failed send the next day', async () => {
+      await trainee.log();
+      await trainee.patch('/me', { emailReminders: false });
+      expect(await run('2026-10-25')).toBe(0);
+      await trainee.patch('/me', { emailReminders: true });
+      expect(await sendReminders(db, async () => { throw new Error('SES down') }, '2026-10-25', 'https://app.test')).toBe(0);
+      expect(await run('2026-10-26')).toBe(1);
+    });
   });
 
   describe('BACB monthly verification form (PDF)', () => {

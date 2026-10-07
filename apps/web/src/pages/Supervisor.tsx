@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, download, profileOf, useEntries, useMonth, useTrainees, useVerifications, type Me, type MonthResult, type Verification } from '../api';
-import { AppShell, Checklist, Deadline, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
+import { AppShell, Checklist, Deadline, ReminderToggle, SignForm, ErrorText, MonthNav, MonthRings, hrs, monthLabel, standardLabel, useMonthParam } from '../components/ui';
 import { EntriesTable } from './Trainee';
 
 const signStatus = (v?: Verification) =>
@@ -23,6 +23,7 @@ export function SupervisorDashboard({ me }: { me: Me }) {
           <h2>Your invite code</h2>
           <InviteCode code={me.inviteCode ?? ''} />
           <p className="muted small">Trainees enter this code to link to you. You'll see only the hours they log under you.</p>
+          <ReminderToggle me={me} />
         </section>
         <section className="card stats">
           <div><span className="muted small">Trainees</span><strong>{list.length}</strong></div>

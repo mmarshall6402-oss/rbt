@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, type Me } from '../api';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ATTESTATIONS, formatHours, signDeadline, signatureMatches, targetsFor, type Edition, type MonthResult, type Profile } from '@fieldtrack/rules';
 import { signOut } from '../auth';
@@ -214,4 +216,16 @@ export function Deadline({ month }: { month: string }) {
   const label = new Date(`${due}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   if (days < 0) return <span className="no small">⚠ Past the BACB deadline ({label}): these hours may not count</span>;
   return <span className={days <= 7 ? 'warn small' : 'muted small'}>{days <= 7 ? `Due in ${days} day${days === 1 ? '' : 's'}` : `Sign by ${label}`}</span>;
+}
+
+/** Opt in/out of deadline reminder emails (both roles). */
+export function ReminderToggle({ me }: { me: Me }) {
+  const qc = useQueryClient();
+  const save = useMutation({ mutationFn: (emailReminders: boolean) => api<Me>('/me', 'PATCH', { emailReminders }), onSuccess: u => qc.setQueryData(['me'], u) });
+  return (
+    <label className="check">
+      <input type="checkbox" checked={me.emailReminders} disabled={save.isPending} onChange={e => save.mutate(e.target.checked)} />
+      Email me before BACB signing deadlines
+    </label>
+  );
 }

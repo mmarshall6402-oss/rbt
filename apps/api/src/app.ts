@@ -35,8 +35,8 @@ const FieldworkTypeEnum = z.enum(['supervised', 'concentrated']);
 const CredentialEnum = z.enum(['bcba', 'bcaba']);
 const EditionEnum = z.enum(['2022', '2027']);
 const Place = z.string().trim().max(100).transform(v => v || null);
-const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum, fieldworkState: Place, fieldworkCountry: Place, bacbId: Place }).partial()
-  .refine(b => Object.keys(b).length > 0, 'Nothing to update');
+const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum, fieldworkState: Place, fieldworkCountry: Place, bacbId: Place, emailReminders: z.boolean() }).partial();
+
 const SignupBody = z.discriminatedUnion('role', [
   z.object({
     role: z.literal('trainee'), fullName: Name, fieldworkType: FieldworkTypeEnum, bacbId: z.string().trim().max(50).optional(),
@@ -207,10 +207,11 @@ export function buildApp({ db, verify, logger = true }: { db: Kysely<DB>; verify
 
     api.get('/me', req => asUser(req, async (_, user) => publicUser(user)));
 
-    // Trainees choose their standard (e.g. switch to 2027 rules if their application date moves). Signed months keep their rules.
+    // Trainees choose their standard and profile (e.g. switch to 2027 rules if their application date moves). Signed months keep their rules.
     api.patch('/me', req => asUser(req, async (trx, user) => {
-      requireRole(user, 'trainee');
-      const changes = ProfileBody.parse(req.body);
+      // Supervisors have no fieldwork standard: they can only change their reminder setting.
+      const changes = user.role === 'trainee' ? ProfileBody.parse(req.body) : ProfileBody.pick({ emailReminders: true }).strict().parse(req.body);
+      if (!Object.keys(changes).length) throw new HttpError(400, 'Nothing to update');
       return publicUser(await trx.updateTable('users').set(changes).where('id', '=', user.id).returningAll().executeTakeFirstOrThrow());
     }));
 

@@ -27,7 +27,7 @@ Terraform in `terraform/` builds one environment per folder in `terraform/envs/`
    ```
 5. Confirm the SNS email subscription. In Billing, activate the `env` cost-allocation tag (the budget filters on it).
 6. In GitHub → Settings → Environments, create `staging` and `production`. Give `production` required reviewers. In each, add variables from `terraform output app`:
-   `AWS_REGION, DEPLOY_ROLE_ARN, ECR_REPOSITORY_URL, ECS_CLUSTER, ECS_SERVICE, API_TASK_FAMILY, MIGRATE_TASK_FAMILY, TASK_SUBNETS, TASK_SECURITY_GROUP, DB_INSTANCE_ID, DB_SUBNET_GROUP, DB_SECURITY_GROUP, DB_PARAMETER_GROUP, WEB_BUCKET, CLOUDFRONT_DISTRIBUTION_ID, COGNITO_AUTHORITY, COGNITO_CLIENT_ID, COGNITO_DOMAIN, APP_URL` (and optionally `SENTRY_DSN_WEB`).
+   `AWS_REGION, DEPLOY_ROLE_ARN, ECR_REPOSITORY_URL, ECS_CLUSTER, ECS_SERVICE, API_TASK_FAMILY, MIGRATE_TASK_FAMILY, REMINDERS_TASK_FAMILY, TASK_SUBNETS, TASK_SECURITY_GROUP, DB_INSTANCE_ID, DB_SUBNET_GROUP, DB_SECURITY_GROUP, DB_PARAMETER_GROUP, WEB_BUCKET, CLOUDFRONT_DISTRIBUTION_ID, COGNITO_AUTHORITY, COGNITO_CLIENT_ID, COGNITO_DOMAIN, APP_URL` (and optionally `SENTRY_DSN_WEB`).
 7. Optional: put the API Sentry DSN in Secrets Manager (`fieldtrack-<env>/sentry-dsn`). Sentry must be on a plan with a signed BAA before production.
 8. Set the repository variable `DEPLOY_ENABLED=true`. Merges to `main` now deploy.
 
@@ -38,6 +38,8 @@ Terraform in `terraform/` builds one environment per folder in `terraform/envs/`
 3. **Production** (after approval): restore a **point-in-time clone of the live database**, run the new migrations against it, delete the clone. Only if that passes: migrate production → roll out → publish → smoke test.
 
 Migrations run with a 5-second lock timeout, so a migration that would block live traffic fails instead.
+
+**Reminder emails.** A daily EventBridge schedule (14:00 UTC) runs `dist/reminders.js` from the same image: it emails trainees and supervisors a week and two days before each BACB signing deadline, once per window, with no client details. SES starts in the sandbox (verified addresses only): request production access after the domain's DKIM records verify.
 
 **Database logins.** Migrations run as the RDS owner (password in Secrets Manager, readable only by the task execution role). The API never gets that password: it signs in as `fieldtrack_api` with 15-minute IAM tokens (`rds-db:connect` on the task role). That login has no privileges except switching to the row-level-security role per request (`db/migrations/007_api_login.sql`). Migrations always run before the new API rolls out, so the login exists before anything uses it.
 
@@ -54,4 +56,4 @@ Verify the restored data, then point the API at it (or copy the affected rows ba
 
 ## Known follow-ups
 - Cross-region copies of backups and records for disaster recovery.
-- SES for Cognito email (the default sender is limited to 50 emails/day).
+- SES for Cognito email (the default sender is limited to 50 emails/day). The SES domain identity already exists for reminder emails; after SES production access is granted, point Cognito's `email_configuration` at it.

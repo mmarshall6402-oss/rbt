@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { durationMinutes, evaluateForms, forecast, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
-import { AppShell, Deadline, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
+import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
 type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
@@ -338,6 +338,7 @@ function StandardSettings({ me }: { me: Me }) {
           </label>
         ))}
       </div>
+      <ReminderToggle me={me} />
       {(!me.bacbId || !me.fieldworkState || !me.fieldworkCountry) && <p className="notice">The BACB denies verification forms with missing information. Fill these in before you download forms.</p>}
       <ErrorText error={save.error} />
     </section>

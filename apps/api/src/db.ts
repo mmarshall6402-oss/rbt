@@ -22,6 +22,7 @@ export interface DB {
     rulesEdition: Edition | null;
     fieldworkState: string | null;
     fieldworkCountry: string | null;
+    emailReminders: Generated<boolean>;
     inviteCode: string | null;
     createdAt: Generated<Date>;
   };
@@ -67,6 +68,11 @@ export interface DB {
     attestation: string | null;
     pdfS3Key: string | null;
     createdAt: Generated<Date>;
+  };
+  remindersSent: {
+    userId: string;
+    kind: string;
+    sentAt: Generated<Date>;
   };
   auditLog: {
     id: Generated<string>;

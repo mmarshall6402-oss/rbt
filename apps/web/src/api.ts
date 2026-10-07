@@ -8,7 +8,7 @@ export type { MonthResult, ProgramResult };
 export interface Me {
   id: string; email: string; fullName: string; role: 'trainee' | 'supervisor' | 'admin';
   bacbId: string | null; fieldworkType: FieldworkType | null; inviteCode: string | null;
-  credential: Credential | null; rulesEdition: Edition | null; fieldworkState: string | null; fieldworkCountry: string | null;
+  credential: Credential | null; rulesEdition: Edition | null; fieldworkState: string | null; fieldworkCountry: string | null; emailReminders: boolean;
 }
 export interface EntryInput {
   supervisorId: string; workDate: string; startTime: string; endTime: string; kind: EntryKind;

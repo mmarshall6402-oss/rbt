@@ -36,6 +36,8 @@ deploy_api() {
   arn=$(register_revision "$API_TASK_FAMILY" "$1")
   aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" --task-definition "$arn" > /dev/null
   aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+  # The daily reminders schedule runs the latest revision of its family.
+  register_revision "$REMINDERS_TASK_FAMILY" "$1" > /dev/null
 }
 
 # rehearse_migrations IMAGE -> restores a point-in-time clone of the live database, migrates it, deletes it

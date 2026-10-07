@@ -8,10 +8,11 @@
     "test": "node scripts/fetch-forms.mjs && vitest run",
     "typecheck": "tsc --noEmit",
     "migrate": "tsx src/migrate.ts",
-    "build": "esbuild src/server.ts src/migrate.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --packages=external --alias:@fieldtrack/rules=../../packages/rules/src/index.ts --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/server.ts src/migrate.ts src/reminders.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --packages=external --alias:@fieldtrack/rules=../../packages/rules/src/index.ts --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
     "forms": "node scripts/fetch-forms.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.1147.0",
     "@aws-sdk/rds-signer": "^3.1147.0",
     "@fieldtrack/rules": "workspace:*",
     "@sentry/node": "^11.4.0",

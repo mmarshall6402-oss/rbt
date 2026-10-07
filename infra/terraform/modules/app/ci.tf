@@ -42,7 +42,7 @@ resource "aws_iam_role_policy" "deploy" {
       { Sid = "EcrKms", Effect = "Allow", Action = ["kms:GenerateDataKey", "kms:Decrypt"], Resource = aws_kms_key.main.arn },
       { Sid = "EcsRead", Effect = "Allow", Action = ["ecs:DescribeTaskDefinition", "ecs:RegisterTaskDefinition", "ecs:DescribeServices", "ecs:DescribeTasks", "ecs:ListTasks"], Resource = "*" },
       { Sid = "EcsDeploy", Effect = "Allow", Action = ["ecs:UpdateService", "ecs:RunTask"], Resource = "*", Condition = { ArnEquals = { "ecs:cluster" = aws_ecs_cluster.main.arn } } },
-      { Sid = "PassRoles", Effect = "Allow", Action = "iam:PassRole", Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn] },
+      { Sid = "PassRoles", Effect = "Allow", Action = "iam:PassRole", Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.reminders_task.arn] },
       { Sid = "Web", Effect = "Allow", Action = ["s3:ListBucket", "s3:PutObject", "s3:DeleteObject"], Resource = [aws_s3_bucket.web.arn, "${aws_s3_bucket.web.arn}/*"] },
       { Sid = "Cdn", Effect = "Allow", Action = "cloudfront:CreateInvalidation", Resource = aws_cloudfront_distribution.main.arn },
       { Sid = "Logs", Effect = "Allow", Action = ["logs:GetLogEvents", "logs:FilterLogEvents"], Resource = "${aws_cloudwatch_log_group.api.arn}:*" },
