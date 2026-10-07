@@ -12,8 +12,9 @@ import { sendReminders } from './reminders.js';
 // Requires a throwaway database: TEST_DATABASE_URL=postgres://... (the schema is dropped and recreated)
 const url = process.env.TEST_DATABASE_URL;
 const db = createDb(url ?? 'postgres://invalid');
-const NOW = new Date('2026-10-15T12:00:00Z'); // fixed clock: deadline rules depend on today
-const app = buildApp({ db, verify: devVerify(), logger: false, clock: () => NOW });
+const NOW = new Date('2026-10-15T12:00:00Z');
+let now = NOW; // the API's clock: deadline rules depend on today (reset before each test)
+const app = buildApp({ db, verify: devVerify(), logger: false, clock: () => now });
 
 const ids = { trainee: '', other: '', sup: '', sup2: '' };
 const as = (sub: string) => {
@@ -52,6 +53,7 @@ describe.skipIf(!url)('API', () => {
   afterAll(() => db.destroy());
 
   beforeEach(async () => {
+    now = NOW;
     // The audit log refuses TRUNCATE; replica mode (superuser, tests only) skips that trigger.
     await sql.raw(`set session_replication_role = replica;
       truncate users, supervisions, entries, month_verifications, audit_log, organizations restart identity cascade;
@@ -302,6 +304,68 @@ describe.skipIf(!url)('API', () => {
     });
   });
 
+  describe('review-pass fixes', () => {
+    const tSign = (m: string) => trainee.post(`/verifications/${m}/sign`, { supervisorId: ids.sup, signature: 'Trainee', attest: true });
+    const sSign = (m: string) => sup.post(`/verifications/${m}/sign`, { traineeId: ids.trainee, signature: 'Sup', attest: true });
+
+    it('a month can only be signed once it is over', async () => {
+      await trainee.log({ workDate: '2026-10-01' });
+      expect((await trainee.post('/verifications/2026-10/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true })).json().error).toMatch(/once it is over/);
+    });
+
+    it('re-signing after a fieldwork type change records the new type', async () => {
+      await logPassingMonth('2026-09');
+      await tSign('2026-09');
+      await trainee.patch('/me', { fieldworkType: 'supervised' });
+      await tSign('2026-09');
+      expect((await sSign('2026-09')).statusCode).toBe(200);
+      expect((await trainee.get('/verifications?month=2026-09')).json()[0].fieldworkType).toBe('supervised');
+    });
+
+    it('a description-only edit keeps the trainee signature; changing hours withdraws it', async () => {
+      const id = randomUUID();
+      await trainee.log({ description: 'a' }, id);
+      await tSign('2026-09');
+      await trainee.log({ description: 'b' }, id);
+      expect((await trainee.get('/verifications?month=2026-09')).json()[0].traineeSignedAt).not.toBeNull();
+    });
+
+    it('an outside signature cannot override signatures made in Fieldtrack', async () => {
+      await logPassingMonth('2026-08');
+      now = new Date('2026-10-02T12:00:00Z'); // late
+      await trainee.post('/verifications/2026-08/sign', { supervisorId: ids.sup, signature: 'Trainee', attest: true });
+      expect((await trainee.put('/external-signatures', { supervisorId: ids.sup, month: '2026-08', signedOn: '2026-09-20' })).statusCode).toBe(409);
+      now = NOW;
+      expect((await trainee.get('/months/2026-08')).json()).toMatchObject({ lost: true, countableMinutes: 0 }); // /months agrees with /progress
+    });
+
+    it('the final form leaves out months signed late, and reports when its signature is stale', async () => {
+      await logPassingMonth('2026-08');
+      await logPassingMonth('2026-09');
+      now = new Date('2026-10-05T12:00:00Z'); // August signed after its Sep 30 deadline
+      await tSign('2026-08'); await sSign('2026-08');
+      await tSign('2026-09'); await sSign('2026-09');
+      now = NOW;
+      const pdf = await PDFDocument.load((await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`)).rawPayload);
+      expect(pdf.getForm().getTextField('START_DATE').getText()).toBe('09/2026');
+      await sup.post('/final/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true });
+      expect((await trainee.get('/final')).json()[0].valid).toBe(true);
+    });
+
+    it('rejects bad input with 4xx instead of 500', async () => {
+      expect((await trainee.log({ format: 'online' })).statusCode).toBe(400); // format on an independent entry
+      const res = await app.inject({ method: 'POST', url: '/api/supervisions', payload: 'x', headers: { 'x-dev-sub': 'trainee', 'content-type': 'application/xml' } });
+      expect(res.statusCode).toBe(415);
+    });
+
+    it('trainees can end a supervision link', async () => {
+      expect((await trainee.patch(`/supervisions/${ids.sup}`, { endsOn: '2026-09-30' })).json().endsOn).toBe('2026-09-30');
+      expect((await trainee.log({ workDate: '2026-10-01' })).statusCode).toBe(400); // no longer their supervisor then
+      expect((await trainee.patch(`/supervisions/${ids.sup}`, { endsOn: '2025-01-01' })).statusCode).toBe(400);
+      expect((await sup.patch(`/supervisions/${ids.sup}`, { endsOn: null })).statusCode).toBe(403);
+    });
+  });
+
   describe('signup', () => {
     it('creates a trainee', async () => {
       const res = await as('new@x').post('/signup', { role: 'trainee', fullName: 'New', fieldworkType: 'supervised' });
@@ -390,8 +454,9 @@ describe.skipIf(!url)('API', () => {
       const id = randomUUID();
       await trainee.log({}, id);
       await sign();
-      await trainee.log({ endTime: '09:00' }, id);
-      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).json().error).toMatch(/re-sign/);
+      await trainee.log({ endTime: '09:00' }, id); // changing the hours withdraws the trainee's signature
+      expect((await trainee.get('/verifications?month=2026-09')).json()[0].traineeSignedAt).toBeNull();
+      expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).json().error).toMatch(/not signed/);
       await sign();
       expect((await sup.post('/verifications/2026-09/sign', { traineeId: ids.trainee, signature: 'Sup', attest: true })).statusCode).toBe(200);
     });
@@ -564,6 +629,7 @@ describe.skipIf(!url)('API', () => {
       expect((await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`)).statusCode).toBe(409); // nothing signed yet
       await logPassingMonth('2026-08');
       await logPassingMonth('2026-09');
+      now = new Date('2026-09-15T12:00:00Z'); // sign August on time
       await signMonth('2026-08');
       const get = await finalForm(await trainee.get(`/final/form.pdf?supervisorId=${ids.sup}`));
       expect(['START_DATE', 'END_DATE', 'INDEPENDENT_HOURS 2', 'TOTAL_MONTHS_OF_FIELDWORK_OBTAINED 2', 'INDEPENDENT_HOURS'].map(get)).toEqual(['08/2026', '08/2026', '18.00', '1', '']); // concentrated column only
@@ -573,6 +639,7 @@ describe.skipIf(!url)('API', () => {
       expect((await finalForm(await trainee.get(`/final/form.pdf?supervisorId=${ids.sup}`)))('TRAINEE_NAME')).toBeNull(); // signed copy is locked
       expect((await trainee.get('/final')).json()).toHaveLength(1);
 
+      now = NOW;
       await signMonth('2026-09');
       const after = await finalForm(await sup.get(`/final/form.pdf?traineeId=${ids.trainee}`));
       expect([after('END_DATE'), after('INDEPENDENT_HOURS 2'), after('SUPERVISOR_SIGNATURE_DATE')]).toEqual(['09/2026', '36.00', '']); // needs re-signing

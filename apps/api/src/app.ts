@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, formLost, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type FormType, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, deadlineDay, formLost, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type Edition, type FormStandard, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
@@ -46,7 +46,7 @@ const SignupBody = z.discriminatedUnion('role', [
   }),
   z.object({ role: z.literal('supervisor'), fullName: Name, bacbId: z.string().trim().min(1, 'BACB certification number is required').max(50) }),
 ]);
-const editionOf = (rulesVersion: string) => (RULESETS['2027'].version === rulesVersion ? '2027' : '2022');
+const editionOf = (rulesVersion: string): Edition => (RULESETS['2027'].version === rulesVersion ? '2027' : '2022');
 const TraineeQuery = z.object({ traineeId: z.uuid().optional() });
 const Id = z.object({ id: z.uuid() });
 
@@ -109,7 +109,9 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
     if (code === '55000') return reply.code(409).send({ error: 'This month is signed and locked' });
     if (code === '23505') return reply.code(409).send({ error: 'Already exists' });
     if (code === '42501') return reply.code(404).send({ error: 'Not found' }); // refused by row-level security
-    if ((err as { statusCode?: number }).statusCode === 400) return reply.code(400).send({ error: 'Invalid request' }); // malformed JSON etc.
+    if (code === '23514') return reply.code(400).send({ error: 'Invalid entry' }); // a database check constraint
+    const status = (err as { statusCode?: number }).statusCode;
+    if (status && status >= 400 && status < 500) return reply.code(status).send({ error: 'Invalid request' }); // malformed JSON, too large, wrong type
     req.log.error({ code }, 'unhandled error'); // no message/stack in logs: may contain row data
     errorTracking.capture(err, { code, route: req.routeOptions.url });
     return reply.code(500).send({ error: 'Internal error' });
@@ -183,12 +185,12 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
     return evaluateMonth(month, await listEntries(trx, { traineeId, supervisorId }, ...monthRange(month)), await traineeProfile(trx, traineeId));
   }
 
-  /** Locked (supervisor-signed) forms keep the fieldwork type they were signed under; others follow the trainee's setting. */
-  async function signedFormTypes(trx: Trx, traineeId: string): Promise<FormType> {
-    const rows = await trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'fieldworkType'])
+  /** Locked (supervisor-signed) forms keep the fieldwork type and rules edition they were signed under; others follow the trainee's setting. */
+  async function signedStandards(trx: Trx, traineeId: string): Promise<FormStandard> {
+    const rows = await trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'fieldworkType', 'rulesVersion'])
       .where('traineeId', '=', traineeId).where('supervisorSignedAt', 'is not', null).execute();
-    const types = new Map(rows.map(r => [`${r.month.slice(0, 7)}|${r.supervisorId}`, r.fieldworkType]));
-    return (month, supervisorId) => types.get(`${month}|${supervisorId}`);
+    const std = new Map(rows.map(r => [`${r.month.slice(0, 7)}|${r.supervisorId}`, { type: r.fieldworkType, edition: editionOf(r.rulesVersion) }]));
+    return (month, supervisorId) => std.get(`${month}|${supervisorId}`);
   }
 
   /** Forms past the BACB signing deadline without timely signatures (in Fieldtrack, or recorded as signed outside it). */
@@ -199,23 +201,28 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
     ]);
     const key = (m: string, sid: string | undefined) => `${m.slice(0, 7)}|${sid}`;
     const v = new Map(signed.map(r => [key(r.month, r.supervisorId), r])), x = new Map(external.map(r => [key(r.month, r.supervisorId), r.signedOn]));
-    const now = today();
+    const now = deadlineDay(clock());
     return (month: string, sid: string | undefined) => formLost(month, now, { ...v.get(key(month, sid)), externalSignedOn: x.get(key(month, sid)) ?? null });
   }
 
   /** What a Final Fieldwork Verification Form reports for a pair: totals from their signed (locked) monthly forms, by fieldwork type. */
   async function finalSummary(trx: Trx, traineeId: string, supervisorId: string) {
-    const months = await trx.selectFrom('monthVerifications').select(['month', 'fieldworkType', 'summary'])
-      .where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('supervisorSignedAt', 'is not', null).orderBy('month').execute();
-    if (!months.length) throw new HttpError(409, 'No signed monthly forms with this supervisor yet');
+    type Hours = { independentMinutes: number; supervisedMinutes: number };
+    const lost = await lostForms(trx, traineeId);
+    // Only forms whose hours count: signed by the deadline, with countable (possibly adjusted) hours.
+    const months = (await trx.selectFrom('monthVerifications').select(['month', 'fieldworkType', 'rulesVersion', 'summary'])
+      .where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('supervisorSignedAt', 'is not', null).orderBy('month').execute())
+      .map(m => { const snap = m.summary as { summary: Hours; countable?: Hours }; return { ...m, hours: snap.countable ?? snap.summary } })
+      .filter(m => !lost(m.month.slice(0, 7), supervisorId) && m.hours.independentMinutes + m.hours.supervisedMinutes > 0);
+    if (!months.length) throw new HttpError(409, 'No signed monthly forms with countable hours under this supervisor yet');
+    const editions = new Set(months.map(m => editionOf(m.rulesVersion)));
+    if (editions.size > 1) throw new HttpError(409, 'These monthly forms were signed under both the 2022 and 2027 rules; the BACB uses one final form per edition');
     const totals: Record<FieldworkType, TypeTotals | null> = { supervised: null, concentrated: null };
     for (const m of months) {
-      type Hours = { independentMinutes: number; supervisedMinutes: number };
-      const snap = m.summary as { summary: Hours; countable?: Hours }, s = snap.countable ?? snap.summary; // the hours recorded on each M-FVF
       const t = (totals[m.fieldworkType] ??= { independentMinutes: 0, supervisedMinutes: 0, months: 0 });
-      t.independentMinutes += s.independentMinutes; t.supervisedMinutes += s.supervisedMinutes; t.months++;
+      t.independentMinutes += m.hours.independentMinutes; t.supervisedMinutes += m.hours.supervisedMinutes; t.months++;
     }
-    return { edition: (await traineeProfile(trx, traineeId)).edition!, startMonth: months[0]!.month.slice(0, 7), endMonth: months.at(-1)!.month.slice(0, 7), totals };
+    return { edition: [...editions][0]!, startMonth: months[0]!.month.slice(0, 7), endMonth: months.at(-1)!.month.slice(0, 7), totals };
   }
 
   /** Resolves the trainee–supervisor pair from the caller's role; 404 unless they're linked. */
@@ -306,6 +313,17 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
       return { traineeId: r.traineeId };
     }));
 
+    // Trainee ends a supervision link (changed supervisors): hours dated after it can't be logged under that supervisor.
+    api.patch('/supervisions/:supervisorId', req => asUser(req, async (trx, user) => {
+      requireRole(user, 'trainee');
+      const { supervisorId } = z.object({ supervisorId: z.uuid() }).parse(req.params);
+      const { endsOn } = z.object({ endsOn: z.iso.date().nullable() }).parse(req.body);
+      const rows = await trx.updateTable('supervisions').set({ endsOn }).where('traineeId', '=', user.id).where('supervisorId', '=', supervisorId)
+        .$if(!!endsOn, q => q.where('startsOn', '<=', endsOn!)).returning(['id', 'startsOn', 'endsOn']).execute();
+      if (!rows.length) throw new HttpError(endsOn ? 400 : 404, endsOn ? 'The end date must be on or after the start date' : 'Not found');
+      return rows[0];
+    }));
+
     api.get('/supervisors', req => asUser(req, async (trx, user) => {
       requireRole(user, 'trainee');
       return trx.selectFrom('supervisions as s').innerJoin('users as u', 'u.id', 's.supervisorId')
@@ -348,7 +366,7 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
           trx.selectFrom('monthVerifications').select(['month', 'supervisorId', 'supervisorSignedAt']).where('traineeId', '=', s.traineeId).where('supervisorSignedAt', 'is not', null)
             .$if(!!s.supervisorId, q => q.where('supervisorId', '=', s.supervisorId!)).execute(),
         ]);
-        const program = evaluateProgram(entries, profile, undefined, await signedFormTypes(trx, s.traineeId), await lostForms(trx, s.traineeId));
+        const program = evaluateProgram(entries, profile, undefined, await signedStandards(trx, s.traineeId), await lostForms(trx, s.traineeId));
         return hoursLogPdf({
           trainee: { name: t.fullName, bacbId: t.bacbId }, entries, forms: program.months,
           standard: `${profile.credential?.toUpperCase()} · ${profile.type === 'concentrated' ? 'Concentrated' : 'Supervised'} · ${profile.edition} rules`,
@@ -447,13 +465,16 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
       // Requirements are met per verification form (month × supervisor), so a trainee with several supervisors must pick one.
       const entries = await listEntries(trx, { ...s, supervisorId: s.supervisorId ?? q.supervisorId }, ...monthRange(month));
       if (new Set(entries.map(e => e.supervisorId)).size > 1) throw new HttpError(400, 'Requirements are checked per supervisor; pass supervisorId');
-      const profile = await traineeProfile(trx, s.traineeId), signedType = entries[0] && (await signedFormTypes(trx, s.traineeId))(month, entries[0].supervisorId);
-      return evaluateMonth(month, entries, signedType ? { ...profile, type: signedType } : profile);
+      const profile = await traineeProfile(trx, s.traineeId), sid = entries[0]?.supervisorId ?? s.supervisorId ?? q.supervisorId;
+      const std = (await signedStandards(trx, s.traineeId))(month, sid), p = { ...profile, ...std };
+      const result = { ...evaluateMonth(month, entries, p), type: p.type };
+      // Same answer as /progress: a form past its signing deadline counts nothing.
+      return (await lostForms(trx, s.traineeId))(month, sid) ? { ...result, lost: true, countable: { independentMinutes: 0, supervisedMinutes: 0 }, countableMinutes: 0 } : result;
     }));
 
     api.get('/progress', req => asUser(req, async (trx, user) => {
       const s = await scope(trx, user, TraineeQuery.parse(req.query).traineeId);
-      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId), undefined, await signedFormTypes(trx, s.traineeId), await lostForms(trx, s.traineeId));
+      return evaluateProgram(await listEntries(trx, s), await traineeProfile(trx, s.traineeId), undefined, await signedStandards(trx, s.traineeId), await lostForms(trx, s.traineeId));
     }));
 
     // ---- Monthly sign-off: trainee signs, then supervisor signs (which locks the month) ----
@@ -472,20 +493,22 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
       }).parse(req.body ?? {});
       // Electronic signature: typing your own name after reading the attestation shows intent to sign.
       if (!signatureMatches(body.signature, user.fullName)) throw new HttpError(400, `Type your full name exactly as on your account (${user.fullName}) to sign`);
+      if (month >= today().slice(0, 7)) throw new HttpError(400, 'A month can be signed once it is over');
       const { traineeId, supervisorId } = await pairFor(trx, user, body);
-      const existing = await trx.selectFrom('monthVerifications').selectAll().where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('month', '=', `${month}-01`).executeTakeFirst();
+      // Locks the row so a concurrent entry edit waits for this signature (and then sees the month locked), or vice versa.
+      const existing = await trx.selectFrom('monthVerifications').selectAll().where('traineeId', '=', traineeId).where('supervisorId', '=', supervisorId).where('month', '=', `${month}-01`).forUpdate().executeTakeFirst();
       if (existing?.supervisorSignedAt) throw new HttpError(409, 'This month is already signed and locked');
       const result = await pairResult(trx, traineeId, supervisorId, month);
 
       if (user.role === 'trainee') {
         return trx.insertInto('monthVerifications')
-          .values({ traineeId, supervisorId, month: `${month}-01`, fieldworkType: (await traineeProfile(trx, traineeId)).type, rulesVersion: result.rulesVersion, summary: JSON.stringify(result), traineeSignedAt: new Date(), supervisorSignedAt: null, traineeSignature: body.signature.trim(), supervisorSignature: null, attestation: ATTESTATIONS[editionOf(result.rulesVersion)].id, pdfS3Key: null })
-          .onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doUpdateSet(eb => ({ summary: eb.ref('excluded.summary'), rulesVersion: eb.ref('excluded.rulesVersion'), traineeSignedAt: eb.ref('excluded.traineeSignedAt'), traineeSignature: eb.ref('excluded.traineeSignature'), attestation: eb.ref('excluded.attestation') })))
+          .values({ traineeId, supervisorId, month: `${month}-01`, fieldworkType: (await traineeProfile(trx, traineeId)).type, rulesVersion: result.rulesVersion, summary: JSON.stringify(result), traineeSignedAt: clock(), supervisorSignedAt: null, traineeSignature: body.signature.trim(), supervisorSignature: null, attestation: ATTESTATIONS[editionOf(result.rulesVersion)].id, pdfS3Key: null })
+          .onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doUpdateSet(eb => ({ summary: eb.ref('excluded.summary'), rulesVersion: eb.ref('excluded.rulesVersion'), fieldworkType: eb.ref('excluded.fieldworkType'), traineeSignedAt: eb.ref('excluded.traineeSignedAt'), traineeSignature: eb.ref('excluded.traineeSignature'), attestation: eb.ref('excluded.attestation') })))
           .returning(['id', 'month', 'traineeSignedAt', 'supervisorSignedAt']).executeTakeFirstOrThrow();
       }
       if (!existing?.traineeSignedAt) throw new HttpError(409, 'The trainee has not signed this month yet');
       if (canonical(existing.summary) !== canonical(result)) throw new HttpError(409, 'Entries changed since the trainee signed. Ask them to re-sign.');
-      return trx.updateTable('monthVerifications').set({ supervisorSignedAt: new Date(), supervisorSignature: body.signature.trim() }).where('id', '=', existing.id)
+      return trx.updateTable('monthVerifications').set({ supervisorSignedAt: clock(), supervisorSignature: body.signature.trim() }).where('id', '=', existing.id)
         .returning(['id', 'month', 'traineeSignedAt', 'supervisorSignedAt']).executeTakeFirstOrThrow();
     }));
 
@@ -522,9 +545,11 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
 
     api.get('/final', req => asUser(req, async (trx, user) => {
       const { traineeId } = TraineeQuery.parse(req.query);
-      return trx.selectFrom('finalVerifications').select(['id', 'traineeId', 'supervisorId', 'summary', 'supervisorSignedAt'])
+      const rows = await trx.selectFrom('finalVerifications').select(['id', 'traineeId', 'supervisorId', 'summary', 'supervisorSignedAt'])
         .$if(user.role === 'supervisor', q => q.where('supervisorId', '=', user.id).$if(!!traineeId, q2 => q2.where('traineeId', '=', traineeId!)))
         .$if(user.role !== 'supervisor', q => q.where('traineeId', '=', user.id)).execute();
+      // valid: the signature still covers exactly the forms that count (no month signed or lost since)
+      return Promise.all(rows.map(async r => ({ ...r, valid: canonical(r.summary) === canonical(await finalSummary(trx, r.traineeId, r.supervisorId).catch(() => null)) })));
     }));
 
     api.post('/final/sign', req => asUser(req, async (trx, user) => {
@@ -533,7 +558,7 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
       if (!signatureMatches(body.signature, user.fullName)) throw new HttpError(400, `Type your full name exactly as on your account (${user.fullName}) to sign`);
       const { traineeId, supervisorId } = await pairFor(trx, user, body);
       const summary = await finalSummary(trx, traineeId, supervisorId);
-      const values = { summary: JSON.stringify(summary), attestation: FINAL_ATTESTATIONS[summary.edition].id, supervisorSignature: body.signature.trim(), supervisorSignedAt: new Date() };
+      const values = { summary: JSON.stringify(summary), attestation: FINAL_ATTESTATIONS[summary.edition].id, supervisorSignature: body.signature.trim(), supervisorSignedAt: clock() };
       return trx.insertInto('finalVerifications').values({ traineeId, supervisorId, ...values })
         .onConflict(oc => oc.columns(['traineeId', 'supervisorId']).doUpdateSet(values))
         .returning(['id', 'supervisorSignedAt']).executeTakeFirstOrThrow();
@@ -604,6 +629,9 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
       const lastDay = new Date(Date.parse(monthRange(b.month)[1]) - 86_400_000).toISOString().slice(0, 10);
       if (b.signedOn < lastDay) throw new HttpError(400, 'A monthly form is signed once the month is over');
       if (b.signedOn > today()) throw new HttpError(400, "That date hasn't happened yet");
+      const inApp = await trx.selectFrom('monthVerifications').select('id').where('traineeId', '=', user.id).where('supervisorId', '=', b.supervisorId)
+        .where('month', '=', `${b.month}-01`).where(eb => eb.or([eb('traineeSignedAt', 'is not', null), eb('supervisorSignedAt', 'is not', null)])).executeTakeFirst();
+      if (inApp) throw new HttpError(409, 'This form is being signed in Fieldtrack; its signatures there are the record');
       const values = { traineeId: user.id, supervisorId: b.supervisorId, month: `${b.month}-01`, signedOn: b.signedOn };
       return (await trx.insertInto('externalSignatures').values(values).onConflict(oc => oc.columns(['traineeId', 'supervisorId', 'month']).doNothing())
         .returning(['id', 'month', 'signedOn']).executeTakeFirst()) ?? { alreadyRecorded: true };

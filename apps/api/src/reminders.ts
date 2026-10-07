@@ -31,7 +31,10 @@ export async function dueReminders(db: Kysely<DB>, today: string, appUrl: string
     .leftJoin('monthVerifications as v', j => j.onRef('v.traineeId', '=', 'e.traineeId').onRef('v.supervisorId', '=', 'e.supervisorId').on('v.month', '=', from))
     .select(['u.id', 'u.email', sql<number>`count(distinct e.supervisor_id)::int`.as('n')])
     .where('e.deletedAt', 'is', null).where('e.workDate', '>=', from).where('e.workDate', '<', to)
-    .where('v.traineeSignedAt', 'is', null).where('u.emailReminders', '=', true).groupBy(['u.id', 'u.email']).execute();
+    .where('v.traineeSignedAt', 'is', null).where('u.emailReminders', '=', true)
+    .where(eb => eb.not(eb.exists(eb.selectFrom('externalSignatures as x').select('x.id') // already signed outside Fieldtrack
+      .whereRef('x.traineeId', '=', 'e.traineeId').whereRef('x.supervisorId', '=', 'e.supervisorId').where('x.month', '=', from))))
+    .groupBy(['u.id', 'u.email']).execute();
   // Supervisors: forms the trainee signed that still need their countersignature.
   const supervisors = await db.selectFrom('monthVerifications as v').innerJoin('users as u', 'u.id', 'v.supervisorId')
     .select(['u.id', 'u.email', sql<number>`count(*)::int`.as('n')])

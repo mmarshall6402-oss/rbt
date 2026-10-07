@@ -40,8 +40,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .primary:hover:not(:disabled) { background: var(--fill); opacity: 0.88; }
 .ghost { border-color: transparent; background: transparent; }
 button.small, .btn.small { padding: 5px 10px; font-size: 13px; }
-.seg { display: flex; gap: 8px; }
-.seg button { flex: 1; flex-direction: column; gap: 0; padding: 10px; border-width: 1.5px; }
+.seg { display: flex; flex-wrap: wrap; gap: 8px; }
+.seg button { flex: 1 1 140px; flex-direction: column; gap: 0; padding: 10px; border-width: 1.5px; white-space: normal; }
 .seg button small { font-weight: 400; color: var(--muted); font-size: 12px; }
 .seg button.on { border-color: var(--ink); background: var(--surface); }
 
@@ -162,6 +162,6 @@ label.check input { width: auto; }
 .comment.resolved { color: var(--muted); }
 .help { max-width: 860px; margin: 0 auto; }
 .help h1 { margin-bottom: 4px; }
-.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
-.steps li.done { color: var(--muted); text-decoration: line-through; }
-.steps li > span { display: inline-block; width: 1.2em; font-weight: 700; }
+.setup-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.setup-steps li.done { color: var(--muted); text-decoration: line-through; }
+.setup-steps li > span { display: inline-block; width: 1.2em; font-weight: 700; }

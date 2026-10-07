@@ -19,7 +19,7 @@ export interface EntryDto extends EntryInput { id: string; createdAt: string; up
 export interface Person { id: string; fullName: string; email: string; startsOn: string; endsOn: string | null }
 export interface Supervisor extends Person { bacbId: string | null }
 export interface Trainee extends Person { fieldworkType: FieldworkType | null; credential: Credential | null; rulesEdition: Edition | null }
-export interface FinalVerification { id: string; traineeId: string; supervisorId: string; supervisorSignedAt: string }
+export interface FinalVerification { id: string; traineeId: string; supervisorId: string; supervisorSignedAt: string; valid: boolean }
 export interface Verification { id: string; traineeId: string; supervisorId: string; month: string; fieldworkType: FieldworkType; rulesVersion: string; traineeSignedAt: string | null; supervisorSignedAt: string | null }
 
 export class ApiError extends Error {

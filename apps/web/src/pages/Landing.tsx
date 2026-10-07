@@ -2,10 +2,10 @@ import { Link } from 'react-router-dom';
 import { Ring, ThemeToggle } from '../components/ui';
 
 const features = [
-  ['Live requirement checks', 'Every BACB monthly rule — 20–130 hours, 5% or 10% supervision, contacts, observation, group limits — checked as you type.'],
+  ['Live requirement checks', 'Every BACB monthly rule for the 2022 or 2027 standard (hours, supervision %, observation, contacts, group limits) checked as you type.'],
   ['Exact numbers, not guesses', '“2.4 supervised hours still needed,” computed so the new hours count toward the total too. No spreadsheet math.'],
-  ['Hours that actually count', 'Progress toward 1,500 or 2,000 hours only includes months that meet every requirement — no surprises at the end.'],
-  ['Supervisor sign-off', 'You sign, your BCBA countersigns. Signed months lock, and the rules version is stored with them forever.'],
+  ['Hours that actually count', 'Progress counts only what the BACB counts: months that meet the requirements (or are adjusted the BACB’s way when they fall short), signed by the deadline.'],
+  ['Official forms, e-signed', 'You sign, your BCBA countersigns, and the official BACB monthly form downloads already filled in. Signed months lock with the rules they were signed under.'],
   ['Built for real records', 'Every change is audited. Nothing is ever hard-deleted. Your fieldwork history is safe if you switch supervisors.'],
   ['60% unrestricted tracking', 'Split each session into restricted and unrestricted time and watch your overall ratio in one ring.'],
 ];
@@ -13,8 +13,8 @@ const features = [
 const faq = [
   ['Is this affiliated with the BACB?', 'No. Fieldtrack is an independent tool. Always confirm requirements against the current BACB handbook.'],
   ['Does it handle Supervised and Concentrated fieldwork?', 'Yes. Pick your type at sign-up; supervision percentages, contact minimums, and total hours adjust automatically.'],
-  ['What happens when BACB changes the rules?', 'Rules are versioned by effective date. Old months keep the rules they were signed under; new months use the new ones.'],
-  ['How does my supervisor join?', 'They create a supervisor account and get an 8-character invite code. You enter the code — you stay in control of who sees your hours.'],
+  ['2022 or 2027 rules?', 'The BACB applies rules by when you apply for certification. Pick yours; months already signed keep the rules they were signed under.'],
+  ['How does my supervisor join?', 'Send them an invite link, or enter the 8-character code from their supervisor account. You stay in control of who sees your hours.'],
   ['What about client information?', 'Use initials, never full names. Supervisors only see entries logged under them.'],
 ];
 
@@ -39,12 +39,12 @@ export function Landing() {
           <p className="muted small">Free during beta · Supervised & Concentrated fieldwork</p>
         </div>
         <div className="hero-card" aria-label="Example dashboard">
-          <div className="hero-card-head"><strong>October 2026</strong><span className="muted">Concentrated</span></div>
+          <div className="hero-card-head"><strong>October 2026</strong><span className="muted">Concentrated · 2027 rules</span></div>
           <div className="rings">
             <Ring value={1080} max={1200} display="18.00" label="Hours this month" sub="2.00 h still needed" ok={false} />
-            <Ring value={11.2} max={10} display="11.2%" label="Supervision (10%)" sub="2.02 h supervised" ok />
-            <Ring value={4} max={6} display="4/6" label="Contacts" sub="2 more needed" ok={false} />
-            <Ring value={1} max={1} display="1" label="Client observation" sub="Requirement met" ok />
+            <Ring value={9.1} max={7.5} display="9.1%" label="Supervision (7.5%)" sub="1.80 h supervised" ok />
+            <Ring value={60} max={90} display="60" label="Minutes observed" sub="30 more needed" ok={false} />
+            <Ring value={64} max={60} display="64%" label="Unrestricted (60%)" sub="Across counted months" ok />
           </div>
         </div>
       </section>
@@ -57,8 +57,8 @@ export function Landing() {
       <section id="how" className="section">
         <h2>How it works</h2>
         <ol className="steps">
-          <li><strong>Sign up</strong><span className="muted">Choose Supervised or Concentrated fieldwork.</span></li>
-          <li><strong>Link your supervisor</strong><span className="muted">Enter their invite code. Add more supervisors any time.</span></li>
+          <li><strong>Sign up</strong><span className="muted">Choose your fieldwork type and when you'll apply.</span></li>
+          <li><strong>Link your supervisor</strong><span className="muted">Send an invite link or enter their code. Add more supervisors any time.</span></li>
           <li><strong>Log & sign</strong><span className="muted">Log sessions, watch the rings fill, sign the month when it's done.</span></li>
         </ol>
       </section>
@@ -66,14 +66,14 @@ export function Landing() {
       <section id="supervisors" className="section split">
         <div>
           <h2>For supervisors</h2>
-          <p className="muted">See every trainee's month at a glance — who's on track, who needs more contacts, who's waiting on your signature. Review entries, then countersign in one click. If a trainee edits hours after signing, you're told before you sign.</p>
+          <p className="muted">See every trainee's month at a glance — who's on track, who needs more contacts, who's waiting on your signature. Review entries, leave comments, then e-sign the official form. If a trainee changes hours after signing, their signature is withdrawn until they re-sign.</p>
           <Link to="/signup?role=supervisor" className="btn">Create a supervisor account</Link>
         </div>
         <ul className="checklist big">
           <li className="ok"><span aria-hidden>✓</span> All trainees, one dashboard</li>
           <li className="ok"><span aria-hidden>✓</span> Only entries logged under you</li>
           <li className="ok"><span aria-hidden>✓</span> Signed months lock automatically</li>
-          <li className="ok"><span aria-hidden>✓</span> Change detection before you sign</li>
+          <li className="ok"><span aria-hidden>✓</span> Deadline reminders by email</li>
         </ul>
       </section>
 

@@ -222,3 +222,17 @@ test('a past month nobody signed in time counts nothing until it is recorded as 
   await expect(page.getByText(/✓ Signed outside Fieldtrack 2026-09-20/)).toBeVisible();
   await expect(page.locator('.ring', { hasText: 'Countable total' }).locator('.ring-value')).toHaveText('22');
 });
+
+test('a double-tap saves one entry, and out-of-range dates are caught before saving', async ({ page }) => {
+  const { trainee } = await seedPair(); // supervising since 2026-01-01
+  await signInAs(page, trainee, '/app?month=2026-09');
+  await page.getByLabel('Date', { exact: true }).fill('2025-12-15');
+  await page.locator('input[type=time]').nth(0).fill('09:00');
+  await page.locator('input[type=time]').nth(1).fill('10:00');
+  await expect(page.getByText(/supervises you from 2026-01-01/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save entry' })).toBeDisabled();
+  await page.getByLabel('Date', { exact: true }).fill('2026-09-15');
+  await page.getByRole('button', { name: 'Save entry' }).dblclick();
+  await expect(page.locator('.sync')).toHaveText('✓ Synced');
+  expect(await call(trainee, '/entries?month=2026-09')).toHaveLength(1);
+});

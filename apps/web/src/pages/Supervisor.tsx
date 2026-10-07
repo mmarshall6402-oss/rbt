@@ -48,7 +48,9 @@ export function SupervisorDashboard({ me }: { me: Me }) {
                       <td className="small">{profileOf(t) ? standardLabel(profileOf(t)!) : '—'}</td>
                       <td className="num">{s ? hrs(s.totalMinutes) : '…'}</td>
                       <td className="num">{s?.totalMinutes ? `${(s.supervisedMinutes / s.totalMinutes * 100).toFixed(1)}%` : '—'}</td>
-                      <td>{m ? (m.passed ? <span className="ok">✓ All met</span> : <span className="no">✗ {failing} not met</span>) : '…'}</td>
+                      <td>{m ? (m.lost ? <span className="no">✗ Lost: not signed by the deadline</span>
+                        : m.passed ? <span className="ok">✓ All met</span>
+                        : <span className="no">✗ {failing} not met{m.countableMinutes > 0 ? <span className="muted small"> · {hrs(m.countableMinutes)} h count after adjustment</span> : null}</span>) : '…'}</td>
                       <td>{signStatus(sigs[i]?.data?.[0])}{!sigs[i]?.data?.[0]?.supervisorSignedAt && !!s?.totalMinutes && <div><Deadline month={month} /></div>}</td>
                       <td><Link className="btn small" to={`/supervise/${t.id}?month=${month}`}>Review</Link></td>
                     </tr>
@@ -93,7 +95,8 @@ export function TraineeReview({ me }: { me: Me }) {
       <h1>{trainee?.fullName ?? 'Trainee'} <span className="muted small">{monthLabel(month)}</span></h1>
       <p className="muted small">Showing only hours logged under you.</p>
 
-      <section className="rings-row">{result.data && trainee && profileOf(trainee) && <MonthRings m={result.data} profile={profileOf(trainee)!} />}</section>
+      <section className="rings-row">{result.data && trainee && profileOf(trainee) && <MonthRings m={result.data} profile={{ ...profileOf(trainee)!, type: result.data.type ?? profileOf(trainee)!.type }} />}</section>
+      {result.data?.lost && <p className="notice">⚠ This form wasn't signed by the BACB deadline, so none of its hours count.</p>}
 
       <div className="cols">
         <section className="card"><h2>Requirements</h2>{result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}</section>
@@ -135,7 +138,9 @@ function FinalVerificationCard({ traineeId, me, edition }: { traineeId: string; 
     <section className="card stack">
       <h2>Final fieldwork verification</h2>
       <p className="muted small">When fieldwork under you ends, sign the BACB Final Fieldwork Verification Form. Totals come from the monthly forms you've both signed.</p>
-      {signed && <p className="ok small">✓ Signed {new Date(signed.supervisorSignedAt).toLocaleDateString()}. Signing more months afterward means signing this again.</p>}
+      {signed && (signed.valid
+        ? <p className="ok small">✓ Signed {new Date(signed.supervisorSignedAt).toLocaleDateString()}. Signing more months afterward means signing this again.</p>
+        : <p className="notice">You signed this on {new Date(signed.supervisorSignedAt).toLocaleDateString()}, but the months that count have changed since. Sign it again so the form matches.</p>)}
       <div className="row">
         <button className="ghost small" disabled={pdf.isPending} onClick={() => pdf.mutate()}>Download final form (PDF)</button>
         {!signing && <button className="small" onClick={() => setSigning(true)}>{signed ? 'Re-sign final form…' : 'Sign final form…'}</button>}

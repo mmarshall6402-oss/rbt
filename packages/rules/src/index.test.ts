@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, forecast, formLost, formatHours, planFor, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
+import { RULESETS, durationMinutes, editionFor, evaluateForms, evaluateMonth, evaluateProgram, groupByForm, findOverlaps, deadlineDay, forecast, formLost, formatHours, planFor, supervisionOk, signDeadline, supervisedMinutesNeeded, targetsFor, validateEntry, type Entry, type MonthResult, type Profile, type ProgramResult, type RuleSet } from './index.js';
 
 const ind = (workDate: string, startTime: string, endTime: string, restrictedMinutes = 0): Entry =>
   ({ workDate, startTime, endTime, kind: 'independent', restrictedMinutes, isGroup: false, contact: null });
@@ -267,7 +267,7 @@ describe('mixed fieldwork types (Handbook: one type per month per supervision st
   // A month that passes under either 2027 type and credential: 20 h independent + 3 h supervised observation (13%)
   const month = (m: string) => [ind(`${m}-01`, '08:00', '18:00'), ind(`${m}-02`, '08:00', '18:00'), sup(`${m}-03`, '09:00', '12:00', { contact: 'observation' })];
   const entries = [...month('2026-08'), ...month('2026-09')];
-  const augSupervised = (m: string) => (m === '2026-08' ? 'supervised' as const : undefined);
+  const augSupervised = (m: string) => (m === '2026-08' ? { type: 'supervised' as const } : undefined);
 
   it('evaluates each form under its own type', () => {
     expect(evaluateForms(entries, C27, undefined, augSupervised).map(f => [f.month, f.type, f.passed])).toEqual([['2026-08', 'supervised', true], ['2026-09', 'concentrated', true]]);
@@ -317,5 +317,57 @@ describe('five-year window', () => {
     const month = [ind('2020-05-01', '00:00', '18:00'), ...[2, 3, 4, 5, 6, 7].map(d => sup(`2020-05-0${d}`, '09:00', '09:30', { contact: d === 2 ? 'observation' : 'contact' }))];
     expect(evaluateProgram(month, C22).windowEnds).toBe('2025-04');
     expect(evaluateProgram([], C22).windowEnds).toBeNull();
+  });
+});
+
+describe('review-pass fixes', () => {
+  const passing22 = (m: string) => [ind(`${m}-01`, '00:00', '18:00'), ...[2, 3, 4, 5, 6, 7].map(d => sup(`${m}-0${d}`, '09:00', '09:30', { contact: d === 2 ? 'observation' : 'contact' }))];
+
+  it('five-year window: hours outside the best 60-month window do not count', () => {
+    const p = evaluateProgram([...passing22('2020-01'), ...passing22('2025-06'), ...passing22('2025-07')], C22);
+    expect(p.windowEnds).toBe('2030-05'); // window starting 2025-06 holds two months, beats 2020-01 alone
+    expect(p.countableMinutes).toBe(2 * 21 * 60);
+    expect(p.months.find(m => m.month === '2020-01')!.outsideWindow).toBe(true);
+  });
+
+  it('2022 supervision is also checked as the form displays it (two-decimal hours)', () => {
+    expect(supervisionOk(1178, 62, 50)).toBe(true); // exactly 5% in minutes
+    expect(supervisionOk(1178, 62, 50, true)).toBe(false); // the form would show 1.03 / 20.66 = 4.99%
+    const r = evaluateMonth('2026-09', [ind('2026-09-01', '00:00', '19:38'), sup('2026-09-02', '09:00', '10:02', { contact: 'observation' })], S22);
+    expect(check(r, 'supervision')).toMatchObject({ ok: false, needed: 1 }); // one more supervised minute fixes the displayed %
+  });
+
+  it('back-to-back pieces of one meeting are one contact', () => {
+    const r = evaluateMonth('2026-09', [sup('2026-09-02', '10:00', '10:30'), sup('2026-09-02', '10:30', '11:00'), sup('2026-09-02', '14:00', '14:30')], C22);
+    expect(r.summary.contacts).toBe(2);
+  });
+
+  it('group "needed" is the minutes that bring group down to individual', () => {
+    const r = evaluateMonth('2026-09', [sup('2026-09-02', '09:00', '09:20'), sup('2026-09-03', '09:00', '10:00', { isGroup: true })], C22);
+    expect(check(r, 'groupShare').needed).toBe(40);
+  });
+
+  it('unrestricted share uses the hours that count, treating trimmed hours as unrestricted', () => {
+    // 40 h independent (10 h restricted) + 2 h supervised = 4.8% supervision → trimmed to 38 h + 2 h
+    const entries = [ind('2026-09-01', '00:00', '20:00', 600), ind('2026-09-02', '00:00', '20:00'), ...[3, 4, 5, 6].map(d => sup(`2026-09-0${d}`, '09:00', '09:30', { contact: d === 3 ? 'observation' : 'contact' }))];
+    const p = evaluateProgram(entries, S22);
+    expect(p.countableMinutes).toBe(40 * 60);
+    expect(p.unrestrictedPercent).toBeCloseTo(((42 * 60 - 600) - 120) / (40 * 60) * 100); // the 2 trimmed hours come off unrestricted
+  });
+
+  it('signatures in Fieldtrack outrank a recorded outside signature; deadlines use US time', () => {
+    expect(formLost('2026-09', '2026-11-05', { traineeSignedAt: '2026-10-05', supervisorSignedAt: '2026-11-02', externalSignedOn: '2026-10-20' })).toBe(true);
+    expect(deadlineDay(new Date('2026-11-01T05:00:00Z'))).toBe('2026-10-31'); // 7pm Oct 31 in Hawaii
+    expect(formLost('2026-09', '2026-11-05', { traineeSignedAt: '2026-10-05', supervisorSignedAt: new Date('2026-11-01T05:00:00Z') })).toBe(false);
+  });
+
+  it('signed forms keep their rules edition', () => {
+    const r = evaluateForms(passing22('2026-09'), { ...C22, edition: '2027' }, undefined, () => ({ edition: '2022' }));
+    expect(r[0]!.rulesVersion).toBe('bacb-2022');
+  });
+
+  it('2027 adjusted months are marked as estimates', () => {
+    const r = evaluateMonth('2026-09', [ind('2026-09-01', '00:00', '20:00'), ind('2026-09-02', '00:00', '20:00'), sup('2026-09-03', '09:00', '10:30', { contact: 'observation' })], S27);
+    expect([r.passed, r.countableMinutes > 0, r.estimate]).toEqual([false, true, true]);
   });
 });

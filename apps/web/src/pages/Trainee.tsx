@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ATTESTATIONS, durationMinutes, evaluateForms, forecast, formLost, signDeadline, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { ATTESTATIONS, RULESETS, durationMinutes, evaluateForms, forecast, formLost, signDeadline, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useBilling, useExternalSignatures, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { ImportHours } from './Import';
@@ -28,8 +28,11 @@ export function TraineeDashboard({ me }: { me: Me }) {
   // Computed on the device with the same rules the server uses: updates instantly, works offline.
   // BACB checks each verification form (month × supervisor) on its own, so each supervisor gets separate results.
   // Signed forms keep the fieldwork type they were signed under.
-  const signedType = (_m: string, sid: string | undefined) => verifications.data?.find(v => v.supervisorId === sid && v.supervisorSignedAt)?.fieldworkType;
-  const forms = entries.data ? evaluateForms(entries.data, profile, undefined, signedType) : [];
+  const signedStd = (_m: string, sid: string | undefined) => {
+    const v = verifications.data?.find(x => x.supervisorId === sid && x.supervisorSignedAt);
+    return v && { type: v.fieldworkType, edition: v.rulesVersion === RULESETS['2027'].version ? '2027' as const : '2022' as const };
+  };
+  const forms = entries.data ? evaluateForms(entries.data, profile, undefined, signedStd) : [];
   const [picked, setPicked] = useState<string>();
   const form = forms.find(f => f.supervisorId === picked) ?? forms[0];
   const result = { data: entries.data ? form ?? evaluateMonth(month, [], profile) : undefined, error: entries.error };
@@ -63,7 +66,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
               label="Unrestricted (60%)" sub="Across counted months" ok={progress.data.countableMinutes ? progress.data.unrestrictedOk : undefined} />
           </>
         )}
-        {result.data && <MonthRings m={result.data} profile={{ ...profile, type: result.data.type ?? profile.type }} />}
+        {result.data && <MonthRings m={result.data} profile={{ ...profile, ...signedStd(month, form?.supervisorId), type: result.data.type ?? profile.type }} />}
       </section>
       {progress.data && <Pace program={progress.data} profile={profile} />}
 
@@ -71,7 +74,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         <section className="card">
           <h2>{editing ? 'Edit entry' : 'Log hours'}</h2>
           {supervisors.data && supervisors.data.length > 0
-            ? <EntryForm key={editing?.id ?? (copying ? `copy-${copying.id}` : `new-${month}`)} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} copyOf={copying} onDone={() => { setEditing(null); setCopying(null) }} />
+            ? <EntryForm key={editing?.id ?? (copying ? `copy-${copying.id}` : `new-${month}`)} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} copyOf={copying} isLocked={sid => locked.has(sid)} onDone={() => { setEditing(null); setCopying(null) }} />
             : <p className="muted">Link a supervisor to start logging.</p>}
         </section>
         <div className="stack">
@@ -79,7 +82,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
             <h2>{monthLabel(month)} requirements{forms.length > 1 && form?.supervisorId && ` · ${names[form.supervisorId] ?? ''}`}</h2>
             <p className="muted small">{standardLabel(profile)}{forms.length > 1 && ' · checked separately for each supervisor’s form'}</p>
             {lost && <p className="notice">⚠ This form wasn't signed by {signDeadline(month)}, so per the BACB none of its hours count. Signed it elsewhere in time? Record that under Monthly sign-off.</p>}
-            {result.data ? <Checklist m={result.data} /> : <ErrorText error={result.error} />}
+            {result.data ? <Checklist m={lost ? { ...result.data, lost: true, countableMinutes: 0 } : result.data} /> : <ErrorText error={result.error} />}
           </section>
           {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} withHours={new Set(forms.map(f => f.supervisorId))} />}
         </div>
@@ -102,7 +105,9 @@ export function TraineeDashboard({ me }: { me: Me }) {
           <ul className="people">{supervisors.data?.map(s => (
             <li key={s.id}>
               <strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span>
-              {finals.data?.some(f => f.supervisorId === s.id) && <span className="ok small">✓ Final form signed</span>}
+              {finals.data?.find(f => f.supervisorId === s.id) && (finals.data.find(f => f.supervisorId === s.id)!.valid
+                ? <span className="ok small">✓ Final form signed</span> : <span className="warn small">Final form needs re-signing (more months count now)</span>)}
+              {!s.endsOn && <EndSupervision supervisor={s} />}
               <button className="ghost small" onClick={() => void download(`/final/form.pdf?supervisorId=${s.id}`, `BACB final fieldwork verification ${s.fullName}.pdf`).catch(e => alert(e.message))}>Final form (PDF)</button>
             </li>
           ))}</ul>
@@ -157,7 +162,9 @@ function InviteByLink({ startsOn }: { startsOn: string }) {
   );
 }
 
-function EntryForm({ month, profile, supervisors, entries, editing, copyOf, onDone }: { month: string; profile: Profile; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; copyOf?: EntryDto | null; onDone: () => void }) {
+function EntryForm({ month, profile, supervisors, entries, editing, copyOf, isLocked, onDone }: { month: string; profile: Profile; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; copyOf?: EntryDto | null; isLocked: (supervisorId: string) => boolean; onDone: () => void }) {
+  // One id per draft: a double-tap re-saves the same entry instead of creating a second one (uploads are idempotent).
+  const [draftId, setDraftId] = useState(() => editing?.id ?? crypto.randomUUID()), [saving, setSaving] = useState(false);
   const [d, setD] = useState<Draft>(() => editing ? fromEntry(editing) : copyOf ? fromEntry(copyOf, today()) : blank(supervisors[0]?.id, month === currentMonth() ? today() : `${month}-01`));
   const [warnings, setWarnings] = useState<string[]>([]);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD(p => ({ ...p, [k]: v }));
@@ -166,17 +173,23 @@ function EntryForm({ month, profile, supervisors, entries, editing, copyOf, onDo
 
   // Live checks with the same rules the server enforces.
   const ready = d.startTime && d.endTime;
-  const problems = ready ? validateEntry(input) : [];
+  const sup = supervisors.find(s => s.id === input.supervisorId);
+  // Caught here rather than after an upload the server would refuse (which would drop the entry).
+  const problems = ready ? [...validateEntry(input),
+    ...(sup && (input.workDate < sup.startsOn || (sup.endsOn && input.workDate > sup.endsOn)) ? [`${sup.fullName} supervises you ${sup.endsOn ? `from ${sup.startsOn} to ${sup.endsOn}` : `from ${sup.startsOn}`}`] : []),
+    ...(input.workDate.startsWith(month) && isLocked(input.supervisorId) ? ['That month is signed and locked for this supervisor'] : [])] : [];
   const preview = ready && !problems.length && input.workDate.startsWith(month)
     ? evaluateMonth(month, [...entries.filter(e => e.id !== editing?.id && e.supervisorId === input.supervisorId), input], profile).summary : null; // this supervisor’s form only
 
   async function save() {
-    const id = editing?.id ?? crypto.randomUUID(); // client-generated id makes uploads idempotent
+    if (saving) return;
+    setSaving(true);
+    const id = draftId;
     const sameDay = entries.filter(e => e.id !== id && e.workDate === input.workDate);
     setWarnings(findOverlaps<EntryInput>([...sameDay, input]).filter(p => p.includes(input))
       .map(([a, b]) => { const o = a === input ? b : a; return `Overlaps ${time12(o.startTime)}–${time12(o.endTime)}` }));
-    await change({ kind: 'put', id, body: input, queuedAt: Date.now() });
-    if (editing || copyOf) onDone(); else setD(blank(d.supervisorId, d.workDate));
+    await change({ kind: 'put', id, body: input, queuedAt: Date.now() }).finally(() => setSaving(false));
+    if (editing || copyOf) onDone(); else { setD(blank(d.supervisorId, d.workDate)); setDraftId(crypto.randomUUID()) }
   }
 
   return (
@@ -220,7 +233,7 @@ function EntryForm({ month, profile, supervisors, entries, editing, copyOf, onDo
       {problems.map(p => <p key={p} className="error">{p}</p>)}
       {preview && <p className="notice">With this entry: <strong>{hrs(preview.totalMinutes)} h</strong> this month{supervisors.length > 1 ? ' with this supervisor' : ''} · <strong>{(preview.supervisedMinutes / preview.totalMinutes * 100).toFixed(1)}%</strong> supervised{targetsFor(profile).rules.minContacts && ` · ${preview.contacts} contacts`}</p>}
       <div className="row">
-        <button className="primary" disabled={problems.length > 0}>{editing ? 'Save changes' : 'Save entry'}</button>
+        <button className="primary" disabled={problems.length > 0 || saving}>{editing ? 'Save changes' : 'Save entry'}</button>
         {editing && <button type="button" className="ghost" onClick={onDone}>Cancel</button>}
       </div>
       {warnings.map(w => <p key={w} className="notice">⚠ {w}</p>)}
@@ -299,7 +312,7 @@ function SignOff({ month, supervisors, me, edition, withHours }: { month: string
               <strong>{s.fullName}</strong>
               {v?.supervisorSignedAt ? <span className="ok">✓ Signed & locked</span>
                 : v?.traineeSignedAt ? <span className="muted small">You signed · waiting on supervisor <button className="ghost small" disabled={pending > 0} onClick={() => setSigning(s.id)}>Re-sign</button></span>
-                : <button className="small" disabled={month > currentMonth() || sign.isPending || pending > 0} onClick={() => setSigning(s.id)}>Sign {monthLabel(month, true)}</button>}
+                : <button className="small" disabled={month >= currentMonth() || sign.isPending || pending > 0} title={month >= currentMonth() ? 'Sign once the month is over' : undefined} onClick={() => setSigning(s.id)}>Sign {monthLabel(month, true)}</button>}
               {!v?.supervisorSignedAt && withHours.has(s.id) && (ext.get(s.id)
                 ? <span className="ok small">✓ Signed outside Fieldtrack {ext.get(s.id)!.signedOn} <button className="ghost small" onClick={() => removeExt.mutate(ext.get(s.id)!.id)}>Undo</button></span>
                 : <><Deadline month={month} />{month < currentMonth() && <OutsideSignature month={month} supervisorId={s.id} />}</>)}
@@ -414,6 +427,7 @@ function Pace({ program, profile }: { program: ProgramResult; profile: Profile }
   return (
     <div className="pace muted small center-text">
       {mixedNote}
+      {program.unverified.map(u => <p key={u} className="muted small">Note: {u}.</p>)}
       <p>{f ? <>At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</> : 'Your projected finish date appears after your first fully countable month.'}</p>
       {program.windowEnds && <p className={f && f.finishMonth > program.windowEnds ? 'notice' : ''}>
         Your BACB 5-year window ends {monthLabel(program.windowEnds)}.{f && f.finishMonth > program.windowEnds && ' At your current pace you won’t finish in time: plan more hours per month.'}
@@ -490,7 +504,7 @@ function GettingStarted({ me, linked, logged }: { me: Me; linked: boolean; logge
   return (
     <section className="card stack">
       <h2>Getting started</h2>
-      <ol className="steps">{steps.map(s => <li key={s.label} className={s.done ? 'done' : ''}><span>{s.done ? '✓' : '○'}</span> {s.label}</li>)}</ol>
+      <ol className="setup-steps">{steps.map(s => <li key={s.label} className={s.done ? 'done' : ''}><span>{s.done ? '✓' : '○'}</span> {s.label}</li>)}</ol>
       <p className="muted small">New to how the BACB checks hours? <Link to="/help">Read the 2-minute guide</Link>.</p>
     </section>
   );
@@ -507,6 +521,21 @@ function OutsideSignature({ month, supervisorId }: { month: string; supervisorId
       <button className="small" disabled={save.isPending}>Save</button>
       <button type="button" className="ghost small" onClick={() => setOpen(false)}>Cancel</button>
       <ErrorText error={save.error} />
+    </form>
+  );
+}
+
+/** Changed supervisors? End the link so no new hours go under them (their access to past hours stays for the records). */
+function EndSupervision({ supervisor }: { supervisor: Supervisor }) {
+  const [open, setOpen] = useState(false), [date, setDate] = useState(today()), invalidate = useInvalidate();
+  const end = useMutation({ mutationFn: () => api(`/supervisions/${supervisor.id}`, 'PATCH', { endsOn: date }), onSuccess: () => { setOpen(false); void invalidate() } });
+  if (!open) return <button className="ghost small" onClick={() => setOpen(true)}>End supervision…</button>;
+  return (
+    <form className="row" onSubmit={e => { e.preventDefault(); end.mutate() }}>
+      <label>Last day {supervisor.fullName} supervised you<input type="date" required value={date} min={supervisor.startsOn} onChange={e => setDate(e.target.value)} /></label>
+      <button className="small" disabled={end.isPending}>End</button>
+      <button type="button" className="ghost small" onClick={() => setOpen(false)}>Cancel</button>
+      <ErrorText error={end.error} />
     </form>
   );
 }

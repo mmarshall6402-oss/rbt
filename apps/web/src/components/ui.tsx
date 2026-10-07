@@ -78,8 +78,8 @@ export const standardLabel = (p: Profile) =>
 
 /** What a month that misses a requirement can still count, per the BACB's adjustment table. */
 export const countableNote = (m: MonthResult) =>
-  m.passed || !m.summary.totalMinutes ? null
-    : m.countableMinutes > 0 ? `If the month ends like this, ${hrs(m.countableMinutes)} of ${hrs(m.summary.totalMinutes)} h can count after the BACB's required adjustment.`
+  m.passed || m.lost || !m.summary.totalMinutes ? null
+    : m.countableMinutes > 0 ? `If the month ends like this, ${hrs(m.countableMinutes)} of ${hrs(m.summary.totalMinutes)} h can count after the BACB's required adjustment${m.estimate ? ' (an estimate: the BACB table is written for the 2022 rules)' : ''}.`
     : m.type === 'concentrated' ? 'If the month ends like this, none of its hours count (concentrated hours can’t be adjusted).'
     : 'If the month ends like this, none of its hours count.';
 
@@ -101,6 +101,11 @@ export function Checklist({ m }: { m: MonthResult }) {
 }
 
 /** Hours per month, single series, with the 20 h minimum as a reference line. */
+const counts = (m: MonthResult) => !m.lost && !m.outsideWindow && m.countableMinutes > 0;
+const countsLabel = (m: MonthResult) =>
+  m.lost ? '✗ lost: not signed by the deadline' : m.outsideWindow ? '✗ outside your 5-year window'
+    : m.passed ? '✓ counts' : m.countableMinutes > 0 ? `${hrs(m.countableMinutes)} h count after adjustment` : '✗ does not count';
+
 /** One bar per verification form (month × supervisor); limits apply to each form separately. */
 export function HoursTrend({ months, names = {} }: { months: MonthResult[]; names?: Record<string, string> }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -119,9 +124,10 @@ export function HoursTrend({ months, names = {} }: { months: MonthResult[]; name
         {data.map((m, i) => {
           const h = m.summary.totalMinutes / 60, x = pad.l + i * bw + 2, w = Math.max(bw - 4, 2), top = y(h), base = y(0), r = Math.min(4, w / 2, base - top);
           return (
-            <g key={`${m.month}|${m.supervisorId ?? ''}`} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+            <g key={`${m.month}|${m.supervisorId ?? ''}`} tabIndex={0} aria-label={`${monthLabel(m.month)}: ${hrs(m.summary.totalMinutes)} hours, ${countsLabel(m)}`}
+              onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}>
               <rect x={pad.l + i * bw} y={pad.t} width={bw} height={H - pad.t - pad.b} fill="transparent" />
-              {h > 0 && <path className={m.passed ? 'bar' : 'bar bar-fail'} d={`M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + w - r} Q${x + w},${top} ${x + w},${top + r} V${base} Z`} />}
+              {h > 0 && <path className={counts(m) ? 'bar' : 'bar bar-fail'} d={`M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + w - r} Q${x + w},${top} ${x + w},${top + r} V${base} Z`} />}
               <text x={x + w / 2} y={H - 6} className="axis" textAnchor="middle">{monthLabel(m.month, true).split(' ')[0]}</text>
             </g>
           );
@@ -130,7 +136,7 @@ export function HoursTrend({ months, names = {} }: { months: MonthResult[]; name
       {hv && (
         <div className="tooltip" style={{ left: `${((pad.l + (hover! + 0.5) * bw) / W) * 100}%` }}>
           <strong>{monthLabel(hv.month)}{hv.supervisorId && names[hv.supervisorId] ? ` · ${names[hv.supervisorId]}` : ''}</strong>
-          <span>{hrs(hv.summary.totalMinutes)} h · {hv.passed ? '✓ counts' : hv.countableMinutes > 0 ? `${hrs(hv.countableMinutes)} h count after adjustment` : '✗ does not count'}</span>
+          <span>{hrs(hv.summary.totalMinutes)} h · {countsLabel(hv)}</span>
         </div>
       )}
     </div>

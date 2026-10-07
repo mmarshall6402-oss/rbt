@@ -37,7 +37,7 @@ export function formValues(f: FormInput): Values {
     return { ...common, INDEPENDENT_HOURS: i, SUPERVISED_HOURS: s, TOTAL_FIELDWORK: (Number(i) + Number(s)).toFixed(2),
       PERCENT_HOURS_SUPERVISED: pct(Number(i) === 0 ? null : Number(s) / (Number(s) + Number(i))) };
   }
-  const obs = f.summary.observationMinutes ?? 0, total = ind + sup;
+  const total = ind + sup, obs = Math.min(f.summary.observationMinutes ?? 0, total); // never more observation than the hours that count
   return { ...common, // whole hours + minutes
     Independent_Hours: String(Math.floor(ind / 60)), Independent_Minutes: String(ind % 60),
     Supervised_Hours: String(Math.floor(sup / 60)), Supervised_Minutes: String(sup % 60),

@@ -35,7 +35,9 @@ export async function hoursLogPdf(d: HoursLogInput): Promise<Uint8Array> {
     const key = `${form.month}|${form.supervisorId ?? ''}`, r = results.get(key), signed = d.signedAt.get(key);
     need(60);
     text(`${monthName(form.month)} · ${d.supervisors.get(form.supervisorId ?? '') ?? 'Supervisor'}`, M, 11, bold); y -= 13;
-    text([`${formatHours(r?.summary.totalMinutes ?? 0)} h`, r?.passed ? 'Meets requirements' : 'Does not meet all requirements',
+    const status = !r ? '' : r.lost ? 'Lost: not signed by the deadline' : r.outsideWindow ? 'Outside the 5-year window'
+      : r.passed ? 'Meets requirements' : r.countableMinutes > 0 ? `${formatHours(r.countableMinutes)} h count after the BACB adjustment` : 'Does not count';
+    text([`${formatHours(r?.summary.totalMinutes ?? 0)} h logged`, status,
       signed ? `Signed by supervisor ${signed.toISOString().slice(0, 10)}` : 'Not signed'].join(' · '), M, 8); y -= 14;
     let x = M;
     for (const [h, w] of COLS) { text(h, x, 7, bold); x += w }
