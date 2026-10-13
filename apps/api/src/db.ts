@@ -1,6 +1,6 @@
 import { CamelCasePlugin, Kysely, PostgresDialect, type Generated, type Selectable } from 'kysely';
 import pg from 'pg';
-import type { ContactType, Credential, Edition, EntryKind, FieldworkType } from '@fieldtrack/rules';
+import type { ContactType, Credential, Edition, EntryKind, FieldworkType, TaskArea } from '@fieldtrack/rules';
 
 // Keep dates/times as strings so they match the rules package exactly (no timezone shifts).
 pg.types.setTypeParser(1082, v => v); // date -> 'YYYY-MM-DD'
@@ -23,6 +23,7 @@ export interface DB {
     fieldworkState: string | null;
     fieldworkCountry: string | null;
     emailReminders: Generated<boolean>;
+    monthlyGoalMinutes: number | null;
     inviteCode: string | null;
     createdAt: Generated<Date>;
   };
@@ -50,6 +51,7 @@ export interface DB {
     format: SupervisionFormat | null;
     description: string;
     observedAsync: Generated<boolean>;
+    taskArea: TaskArea | null;
     createdAt: Generated<Date>;
     updatedAt: Generated<Date>;
     deletedAt: Date | null;

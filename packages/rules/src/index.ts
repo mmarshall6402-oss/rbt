@@ -21,6 +21,13 @@ export interface Entry {
 }
 
 export type Credential = 'bcba' | 'bcaba';
+/** BCBA Test Content Outline (6th ed.) sections, for tagging what an activity worked on. */
+export const TASK_AREAS = {
+  A: 'Behaviorism and Philosophical Foundations', B: 'Concepts and Principles', C: 'Measurement, Data Display, and Interpretation',
+  D: 'Experimental Design', E: 'Ethical and Professional Issues', F: 'Behavior Assessment', G: 'Behavior-Change Procedures',
+  H: 'Selecting and Implementing Interventions', I: 'Personnel Supervision and Management',
+} as const;
+export type TaskArea = keyof typeof TASK_AREAS;
 /** Which BACB standard applies. Decided by when the trainee submits their application (not when hours were worked):
  *  before 2027-01-01 → '2022', on/after → '2027'. */
 export type Edition = '2022' | '2027';

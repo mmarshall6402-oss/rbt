@@ -1,23 +1,26 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ATTESTATIONS, RULESETS, durationMinutes, evaluateForms, forecast, formLost, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { ATTESTATIONS, RULESETS, TASK_AREAS, durationMinutes, evaluateForms, forecast, formLost, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useBilling, useExternalSignatures, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { ImportHours } from './Import';
 import { HoursLeft, MonthStrip, ProgressBar, RecentEntries } from '../components/left';
+import { GoalCard, Greeting, Reports, TabBar } from '../components/home';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, ErrorText, HoursTrend, MonthNav, countableNote, currentMonth, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
-type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
+type RMode = 'unrestricted' | 'restricted' | 'mixed';
+type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string; rMode: RMode };
 const blank = (supervisorId = '', workDate = today()): Draft =>
-  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', isGroup: false, contact: null, format: null, description: '', observedAsync: false });
+  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', rMode: 'unrestricted', isGroup: false, contact: null, format: null, description: '', observedAsync: false, taskArea: null });
 const fromEntry = (e: EntryDto, workDate = e.workDate): Draft => ({
   supervisorId: e.supervisorId, workDate, startTime: e.startTime, endTime: e.endTime, kind: e.kind, restrictedHours: String(e.restrictedMinutes / 60),
-  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description, observedAsync: !!e.observedAsync,
+  rMode: !e.restrictedMinutes ? 'unrestricted' : e.restrictedMinutes >= durationMinutes(e) ? 'restricted' : 'mixed',
+  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description, observedAsync: !!e.observedAsync, taskArea: e.taskArea ?? null,
 });
-const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
-  ...d, restrictedMinutes: Math.round((Number(restrictedHours) || 0) * 60),
+const toInput = ({ restrictedHours, rMode, ...d }: Draft): EntryInput => ({
+  ...d, restrictedMinutes: rMode === 'unrestricted' ? 0 : rMode === 'restricted' && d.startTime && d.endTime ? durationMinutes(d) : Math.round((Number(restrictedHours) || 0) * 60),
   ...(d.kind === 'independent' ? { isGroup: false, contact: null, format: null } : { format: d.format ?? 'in_person', observedAsync: false }),
 });
 
@@ -59,12 +62,14 @@ export function TraineeDashboard({ me }: { me: Me }) {
         </div>
       )}
 
+      <Greeting me={me} />
       {progress.data && <MonthStrip program={progress.data} profile={profile} month={month} onPick={setMonth} />}
+      {entries.data && <GoalCard me={me} forms={forms} month={month} profile={profile} />}
       {progress.data && result.data && <HoursLeft program={progress.data} m={result.data} profile={{ ...profile, ...signedStd(month, form?.supervisorId), type: result.data.type ?? profile.type }} lost={lost} />}
       {!result.data && <ErrorText error={result.error} />}
 
       <div className="cols">
-        <section className="card">
+        <section className="card" id="log">
           <h2>{editing ? 'Edit entry' : 'Log hours'}</h2>
           {supervisors.data && supervisors.data.length > 0
             ? <EntryForm key={editing?.id ?? (copying ? `copy-${copying.id}` : `new-${month}`)} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} copyOf={copying} isLocked={sid => locked.has(sid)} onDone={() => { setEditing(null); setCopying(null) }} />
@@ -75,6 +80,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
           {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} withHours={new Set(forms.map(f => f.supervisorId))} />}
         </div>
       </div>
+      <Reports entries={entries.data ?? []} month={month} />
       {progress.data && <Pace program={progress.data} profile={profile} />}
 
       <section className="card" id="entries">
@@ -83,7 +89,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} month={month} onEdit={e => { setCopying(null); setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} onRepeat={e => { setEditing(null); setCopying(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
       </section>
 
-      <details className="card more">
+      <details className="card more" id="more">
         <summary><h2>Supervisors, settings and more</h2></summary>
         <div className="cols">
           <section className="card">
@@ -106,6 +112,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         </div>
         <MonthChanges month={month} />
       </details>
+      <TabBar />
     </AppShell>
   );
 }
@@ -203,10 +210,21 @@ function EntryForm({ month, profile, supervisors, entries, editing, copyOf, isLo
           </button>
         ))}
       </div>
-      <div className="row">
-        <label>Restricted hours<input type="number" min="0" step="0.05" value={d.restrictedHours} onChange={e => set('restrictedHours', e.target.value)} /></label>
-        {ready && !problems.length && <p className="muted small self-end">{hrs(durationMinutes(input))} h total · {hrs(durationMinutes(input) - input.restrictedMinutes)} h unrestricted</p>}
+      <div className="seg seg-3" role="radiogroup" aria-label="Activity type">
+        {([['unrestricted', 'Unrestricted', 'Planning, data, analysis'], ['restricted', 'Restricted', 'Direct therapy'], ['mixed', 'Mixed', 'Some of each']] as const).map(([k, label, hint]) => (
+          <button type="button" key={k} role="radio" aria-checked={d.rMode === k} className={d.rMode === k ? `on ${k}` : ''} onClick={() => set('rMode', k)}>{label}<small>{hint}</small></button>
+        ))}
       </div>
+      <div className="row">
+        {d.rMode === 'mixed' && <label>Restricted hours<input type="number" min="0" step="0.05" value={d.restrictedHours} onChange={e => set('restrictedHours', e.target.value)} /></label>}
+        <label>Task list area (optional)
+          <select value={d.taskArea ?? ''} onChange={e => set('taskArea', (e.target.value || null) as Draft['taskArea'])}>
+            <option value="">None</option>
+            {Object.entries(TASK_AREAS).map(([k, v]) => <option key={k} value={k}>{k}. {v}</option>)}
+          </select>
+        </label>
+      </div>
+      {ready && !problems.length && <p className="muted small">{hrs(durationMinutes(input))} h total · {hrs(input.restrictedMinutes)} h restricted · {hrs(durationMinutes(input) - input.restrictedMinutes)} h unrestricted</p>}
       {d.kind === 'independent' && (
         <label className="check">
           <input type="checkbox" checked={d.observedAsync} onChange={e => set('observedAsync', e.target.checked)} />

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import type { ContactType, Credential, Edition, EntryKind, FieldworkType, MonthResult, Profile, ProgramResult } from '@fieldtrack/rules';
+import type { ContactType, Credential, Edition, EntryKind, FieldworkType, MonthResult, Profile, ProgramResult, TaskArea } from '@fieldtrack/rules';
 import { authHeaders } from './auth';
 import { useSyncState, withPending } from './sync';
 
@@ -8,12 +8,12 @@ export type { MonthResult, ProgramResult };
 export interface Me {
   id: string; email: string; fullName: string; role: 'trainee' | 'supervisor' | 'admin';
   bacbId: string | null; fieldworkType: FieldworkType | null; inviteCode: string | null;
-  credential: Credential | null; rulesEdition: Edition | null; fieldworkState: string | null; fieldworkCountry: string | null; emailReminders: boolean;
+  credential: Credential | null; rulesEdition: Edition | null; fieldworkState: string | null; fieldworkCountry: string | null; emailReminders: boolean; monthlyGoalMinutes: number | null;
 }
 export interface EntryInput {
   supervisorId: string; workDate: string; startTime: string; endTime: string; kind: EntryKind;
   restrictedMinutes: number; isGroup: boolean; contact: ContactType | null; format: 'in_person' | 'online' | null; description: string;
-  observedAsync: boolean;
+  observedAsync: boolean; taskArea?: TaskArea | null;
 }
 export interface EntryDto extends EntryInput { id: string; createdAt: string; updatedAt: string; pending?: boolean }
 export interface Person { id: string; fullName: string; email: string; startsOn: string; endsOn: string | null }
