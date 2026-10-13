@@ -5,7 +5,7 @@ import { ATTESTATIONS, RULESETS, durationMinutes, evaluateForms, forecast, formL
 import { api, download, profileOf, useBilling, useExternalSignatures, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { ImportHours } from './Import';
-import { HoursLeft, MonthStrip, RecentEntries } from '../components/left';
+import { HoursLeft, MonthStrip, ProgressBar, RecentEntries } from '../components/left';
 import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, ErrorText, HoursTrend, MonthNav, countableNote, currentMonth, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
@@ -44,7 +44,8 @@ export function TraineeDashboard({ me }: { me: Me }) {
   const [editing, setEditing] = useState<EntryDto | null>(null), [copying, setCopying] = useState<EntryDto | null>(null);
 
   return (
-    <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}>
+    <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}
+      progress={progress.data && <ProgressBar program={progress.data} m={result.data && (lost ? { ...result.data, lost: true } : result.data)} />}>
       {supervisors.data?.length === 0 && <LinkSupervisor first />}
       <GettingStarted me={me} linked={!!supervisors.data?.length} logged={!!progress.data?.months.length || !!entries.data?.length} />
 

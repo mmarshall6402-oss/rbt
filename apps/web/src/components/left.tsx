@@ -3,7 +3,7 @@ import { durationMinutes, formatHours, signDeadline, targetsFor, type MonthResul
 import type { EntryDto } from '../api';
 import { currentMonth, dateLabel, hrs, monthLabel, standardLabel, time12 } from './ui';
 
-const whole = (min: number) => formatHours(min, 0);
+const whole = (min: number) => Number(formatHours(min, 0)).toLocaleString();
 type Status = 'good' | 'bad' | 'info';
 function Row({ label, value, status, note }: { label: string; value: string; status: Status; note: string }) {
   return (
@@ -40,7 +40,6 @@ export function HoursLeft({ program, m, profile, lost }: { program: ProgramResul
         <h2>Toward {(req / 60).toLocaleString()} hours</h2>
         <p className="standard">{standardLabel(profile)}</p>
         <div className="left-big"><strong>{whole(totalLeft)}</strong> h left <span className="muted small">· {whole(program.countableMinutes)} counted</span></div>
-        <div className="bar-track" aria-hidden><div style={{ width: `${Math.min(100, (program.countableMinutes / req) * 100)}%` }} /></div>
         <ul className="left-list">
           <Row label="Unrestricted" value={`${whole(unres)} h`} status={needUnres ? 'bad' : 'good'} note={needUnres ? `${whole(needUnres)} h left (${t.rules.minUnrestrictedPercent}% min)` : `${t.rules.minUnrestrictedPercent}% met`} />
           <Row label="Restricted" value={`${whole(restricted)} h`} status={roomRestricted ? 'info' : 'bad'} note={roomRestricted ? `${whole(roomRestricted)} h more can count` : 'at the 40% max'} />
@@ -112,5 +111,21 @@ export function RecentEntries({ entries }: { entries: EntryDto[] }) {
         </ul>
       )}
     </section>
+  );
+}
+
+/** Pinned under the top bar on every scroll position: overall progress and how the open month stands. */
+export function ProgressBar({ program, m }: { program: ProgramResult; m?: MonthResult }) {
+  const req = program.requiredMinutes, done = Math.min(program.countableMinutes, req), pct = req ? (done / req) * 100 : 0;
+  const missing = m ? m.checks.filter(c => !c.ok).length : 0;
+  return (
+    <div className="progress" role="group" aria-label="Overall progress">
+      <div className="progress-text">
+        <span><strong>{whole(done)}</strong> of {(req / 60).toLocaleString()} h · <strong>{pct.toFixed(0)}%</strong></span>
+        <span className="muted">{whole(req - done)} h left</span>
+        {m && <span className={`pill ${missing || m.lost ? 'bad' : 'good'}`}>{monthLabel(m.month, true)}: {m.lost ? '✗ not signed in time' : missing ? `✗ ${missing} not met` : '✓ on track'}</span>}
+      </div>
+      <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)} aria-label="Hours toward the total"><div style={{ width: `${pct}%` }} /></div>
+    </div>
   );
 }

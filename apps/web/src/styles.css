@@ -47,7 +47,7 @@ button.small, .btn.small { padding: 5px 10px; font-size: 13px; }
 .seg button.on { border-color: var(--ink); background: var(--surface); }
 
 /* Layout */
-.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 12px 24px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
 .topbar nav { display: flex; gap: 20px; } .topbar nav a { text-decoration: none; color: var(--muted); font-weight: 500; } .topbar nav a:hover { color: var(--ink); }
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .brand { font-weight: 800; letter-spacing: -0.03em; font-size: 18px; text-decoration: none; }
@@ -172,8 +172,6 @@ label.check input { width: auto; flex: none; margin: 0; accent-color: var(--ink)
 .left-col { min-width: 0; display: grid; gap: 10px; align-content: start; }
 .left-col h2 { margin: 0; }
 .left-big { font-size: 15px; } .left-big strong { font-size: 30px; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
-.bar-track { height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; }
-.bar-track > div { height: 100%; background: var(--fill); border-radius: inherit; }
 .left-list { list-style: none; margin: 0; padding: 0; display: grid; }
 .left-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .left-row:last-child { border-bottom: 0; }
@@ -201,3 +199,9 @@ details.more .card { background: var(--bg); }
   .recent li .tag { justify-self: start; }
 }
 .standard { margin: 0; font-size: 13px; color: var(--muted); } .standard strong { color: var(--ink); }
+.progress { flex-basis: 100%; display: grid; gap: 6px; }
+.progress-text { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.progress-text .pill { margin-left: auto; }
+.progress-track { height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.progress-track > div { height: 100%; background: var(--fill); border-radius: inherit; transition: width .4s ease; }
+@media (prefers-reduced-motion: reduce) { .progress-track > div { transition: none; } }
