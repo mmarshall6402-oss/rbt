@@ -1,7 +1,6 @@
 -- Fieldtrack initial schema. Descriptions may contain PHI: run only on encrypted storage (RDS w/ KMS) under a BAA.
 -- The API sets `app.user_id` per transaction (SET LOCAL app.user_id = '<uuid>') so audit rows record the actor.
 
-begin;
 
 create type user_role as enum ('trainee', 'supervisor', 'admin');
 create type fieldwork_type as enum ('supervised', 'concentrated');
@@ -127,4 +126,3 @@ end $$;
 
 create trigger entries_guard before insert or update or delete on entries for each row execute function guard_entries();
 
-commit;

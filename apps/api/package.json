@@ -4,21 +4,30 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "dev": "node scripts/fetch-forms.mjs && tsx watch src/server.ts",
+    "test": "node scripts/fetch-forms.mjs && vitest run",
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx src/migrate.ts",
+    "build": "esbuild src/server.ts src/migrate.ts src/reminders.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --packages=external --alias:@fieldtrack/rules=../../packages/rules/src/index.ts --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "forms": "node scripts/fetch-forms.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.1147.0",
+    "@aws-sdk/rds-signer": "^3.1147.0",
     "@fieldtrack/rules": "workspace:*",
+    "@sentry/node": "^11.4.0",
     "aws-jwt-verify": "^5.2.1",
     "fastify": "^5.12.5",
     "kysely": "^0.29.6",
+    "pdf-lib": "^1.17.1",
     "pg": "^8.23.1",
+    "stripe": "^23.0.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.0.3"

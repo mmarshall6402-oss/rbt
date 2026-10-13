@@ -1,0 +1,541 @@
+import { useState, type FormEvent } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ATTESTATIONS, RULESETS, durationMinutes, evaluateForms, forecast, formLost, signDeadline, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { api, download, profileOf, useBilling, useExternalSignatures, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
+import { enqueue, useSyncState, type Op } from '../sync';
+import { ImportHours } from './Import';
+import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
+
+const today = () => new Date().toLocaleDateString('en-CA');
+type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
+const blank = (supervisorId = '', workDate = today()): Draft =>
+  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', isGroup: false, contact: null, format: null, description: '', observedAsync: false });
+const fromEntry = (e: EntryDto, workDate = e.workDate): Draft => ({
+  supervisorId: e.supervisorId, workDate, startTime: e.startTime, endTime: e.endTime, kind: e.kind, restrictedHours: String(e.restrictedMinutes / 60),
+  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description, observedAsync: !!e.observedAsync,
+});
+const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
+  ...d, restrictedMinutes: Math.round((Number(restrictedHours) || 0) * 60),
+  ...(d.kind === 'independent' ? { isGroup: false, contact: null, format: null } : { format: d.format ?? 'in_person', observedAsync: false }),
+});
+
+export function TraineeDashboard({ me }: { me: Me }) {
+  const [month, setMonth] = useMonthParam();
+  const profile = profileOf(me)!; // trainees always have a standard (enforced by the database)
+  const supervisors = useSupervisors(), entries = useEntries(month), progress = useProgress(), verifications = useVerifications(month), finals = useFinals();
+  const locked = new Set(verifications.data?.filter(v => v.supervisorSignedAt).map(v => v.supervisorId));
+  // Computed on the device with the same rules the server uses: updates instantly, works offline.
+  // BACB checks each verification form (month × supervisor) on its own, so each supervisor gets separate results.
+  // Signed forms keep the fieldwork type they were signed under.
+  const signedStd = (_m: string, sid: string | undefined) => {
+    const v = verifications.data?.find(x => x.supervisorId === sid && x.supervisorSignedAt);
+    return v && { type: v.fieldworkType, edition: v.rulesVersion === RULESETS['2027'].version ? '2027' as const : '2022' as const };
+  };
+  const forms = entries.data ? evaluateForms(entries.data, profile, undefined, signedStd) : [];
+  const [picked, setPicked] = useState<string>();
+  const form = forms.find(f => f.supervisorId === picked) ?? forms[0];
+  const result = { data: entries.data ? form ?? evaluateMonth(month, [], profile) : undefined, error: entries.error };
+  const names = Object.fromEntries((supervisors.data ?? []).map(s => [s.id, s.fullName]));
+  const externals = useExternalSignatures().data;
+  const lost = !!form && formLost(month, today(), { ...verifications.data?.find(v => v.supervisorId === form.supervisorId),
+    externalSignedOn: externals?.find(x => x.supervisorId === form.supervisorId && x.month.startsWith(month))?.signedOn ?? null });
+  const [editing, setEditing] = useState<EntryDto | null>(null), [copying, setCopying] = useState<EntryDto | null>(null);
+
+  return (
+    <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}>
+      {supervisors.data?.length === 0 && <LinkSupervisor first />}
+      <GettingStarted me={me} linked={!!supervisors.data?.length} logged={!!progress.data?.months.length || !!entries.data?.length} />
+
+      {forms.length > 1 && (
+        <div className="seg" role="radiogroup" aria-label="Verification form">
+          {forms.map(f => (
+            <button type="button" key={f.supervisorId} role="radio" aria-checked={f === form} className={f === form ? 'on' : ''} onClick={() => setPicked(f.supervisorId)}>
+              {names[f.supervisorId!] ?? 'Supervisor'}<small>{f.passed ? '✓ all met' : `✗ ${f.checks.filter(c => !c.ok).length} not met`}</small>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <section className="rings-row">
+        {progress.data && (
+          <>
+            <Ring value={progress.data.countableMinutes} max={progress.data.requiredMinutes} display={`${Math.floor(progress.data.countableMinutes / 60)}`}
+              label={`of ${progress.data.requiredMinutes / 60} hours`} sub="Countable total" />
+            <Ring value={progress.data.unrestrictedPercent} max={60} display={`${progress.data.unrestrictedPercent.toFixed(0)}%`}
+              label="Unrestricted (60%)" sub="Across counted months" ok={progress.data.countableMinutes ? progress.data.unrestrictedOk : undefined} />
+          </>
+        )}
+        {result.data && <MonthRings m={result.data} profile={{ ...profile, ...signedStd(month, form?.supervisorId), type: result.data.type ?? profile.type }} />}
+      </section>
+      {progress.data && <Pace program={progress.data} profile={profile} />}
+
+      <div className="cols">
+        <section className="card">
+          <h2>{editing ? 'Edit entry' : 'Log hours'}</h2>
+          {supervisors.data && supervisors.data.length > 0
+            ? <EntryForm key={editing?.id ?? (copying ? `copy-${copying.id}` : `new-${month}`)} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} copyOf={copying} isLocked={sid => locked.has(sid)} onDone={() => { setEditing(null); setCopying(null) }} />
+            : <p className="muted">Link a supervisor to start logging.</p>}
+        </section>
+        <div className="stack">
+          <section className="card">
+            <h2>{monthLabel(month)} requirements{forms.length > 1 && form?.supervisorId && ` · ${names[form.supervisorId] ?? ''}`}</h2>
+            <p className="muted small">{standardLabel(profile)}{forms.length > 1 && ' · checked separately for each supervisor’s form'}</p>
+            {lost && <p className="notice">⚠ This form wasn't signed by {signDeadline(month)}, so per the BACB none of its hours count. Signed it elsewhere in time? Record that under Monthly sign-off.</p>}
+            {result.data ? <Checklist m={lost ? { ...result.data, lost: true, countableMinutes: 0 } : result.data} /> : <ErrorText error={result.error} />}
+          </section>
+          {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} withHours={new Set(forms.map(f => f.supervisorId))} />}
+        </div>
+      </div>
+
+      <section className="card">
+        <div className="row spread"><h2>Entries</h2><span className="row">Export all hours{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}`, `fieldwork-hours.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div>
+        <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} month={month} onEdit={e => { setCopying(null); setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} onRepeat={e => { setEditing(null); setCopying(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
+      </section>
+
+      <MonthChanges month={month} />
+
+      <div className="cols">
+        <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} names={names} /></section>
+        <StandardSettings me={me} />
+        <BillingCard />
+        {supervisors.data && supervisors.data.length > 0 && <ImportHours me={me} supervisors={supervisors.data} />}
+        <section className="card">
+          <h2>Supervisors</h2>
+          <ul className="people">{supervisors.data?.map(s => (
+            <li key={s.id}>
+              <strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span>
+              {finals.data?.find(f => f.supervisorId === s.id) && (finals.data.find(f => f.supervisorId === s.id)!.valid
+                ? <span className="ok small">✓ Final form signed</span> : <span className="warn small">Final form needs re-signing (more months count now)</span>)}
+              {!s.endsOn && <EndSupervision supervisor={s} />}
+              <button className="ghost small" onClick={() => void download(`/final/form.pdf?supervisorId=${s.id}`, `BACB final fieldwork verification ${s.fullName}.pdf`).catch(e => alert(e.message))}>Final form (PDF)</button>
+            </li>
+          ))}</ul>
+          <LinkSupervisor />
+        </section>
+      </div>
+    </AppShell>
+  );
+}
+
+function useInvalidate() {
+  const qc = useQueryClient();
+  return () => Promise.all(['entries', 'month', 'progress', 'verifications', 'supervisors', 'changes', 'history', 'external'].map(k => qc.invalidateQueries({ queryKey: [k] })));
+}
+
+/** Saves to the on-device outbox; lists re-render from it at once and uploading happens in the background. */
+const useLocalChange = () => (op: Op) => enqueue(op);
+
+function LinkSupervisor({ first = false }: { first?: boolean }) {
+  const [code, setCode] = useState(''), [startsOn, setStartsOn] = useState(today());
+  const invalidate = useInvalidate();
+  const link = useMutation({ mutationFn: () => api('/supervisions', 'POST', { inviteCode: code, startsOn }), onSuccess: () => { setCode(''); void invalidate() } });
+  return (
+    <form className={first ? 'card highlight stack' : 'stack link-form'} onSubmit={(e: FormEvent) => { e.preventDefault(); link.mutate() }}>
+      {first && <><h2>Link your supervisor</h2><p className="muted">Ask your BCBA for their 8-character invite code. They'll only see hours you log under them.</p></>}
+      <div className="row">
+        <label>Invite code<input value={code} onChange={e => setCode(e.target.value.toUpperCase())} maxLength={8} required placeholder="ABCD2345" className="mono" /></label>
+        <label>Supervising since<input type="date" value={startsOn} onChange={e => setStartsOn(e.target.value)} max={today()} required /></label>
+      </div>
+      <button className={first ? 'primary' : ''} disabled={link.isPending}>Add supervisor</button>
+      <ErrorText error={link.error} />
+      <InviteByLink startsOn={startsOn} />
+    </form>
+  );
+}
+
+/** No code yet? Send the supervisor a one-time link; they're linked when they accept (even if they sign up first). */
+function InviteByLink({ startsOn }: { startsOn: string }) {
+  const [url, setUrl] = useState(''), [copied, setCopied] = useState(false);
+  const create = useMutation({
+    mutationFn: () => api<{ token: string }>('/invites', 'POST', { startsOn }),
+    onSuccess: ({ token }) => setUrl(`${location.origin}/invite/${token}`),
+  });
+  const copy = () => navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) });
+  return url ? (
+    <div className="stack">
+      <label>Send this link to your supervisor (works once, for 30 days)<input readOnly value={url} onFocus={e => e.target.select()} /></label>
+      <button type="button" className="small" onClick={copy}>{copied ? 'Copied ✓' : 'Copy link'}</button>
+    </div>
+  ) : (
+    <p className="muted small">No code? <button type="button" className="ghost small" disabled={create.isPending} onClick={() => create.mutate()}>Invite your supervisor by link</button><ErrorText error={create.error} /></p>
+  );
+}
+
+function EntryForm({ month, profile, supervisors, entries, editing, copyOf, isLocked, onDone }: { month: string; profile: Profile; supervisors: Supervisor[]; entries: EntryDto[]; editing: EntryDto | null; copyOf?: EntryDto | null; isLocked: (supervisorId: string) => boolean; onDone: () => void }) {
+  // One id per draft: a double-tap re-saves the same entry instead of creating a second one (uploads are idempotent).
+  const [draftId, setDraftId] = useState(() => editing?.id ?? crypto.randomUUID()), [saving, setSaving] = useState(false);
+  const [d, setD] = useState<Draft>(() => editing ? fromEntry(editing) : copyOf ? fromEntry(copyOf, today()) : blank(supervisors[0]?.id, month === currentMonth() ? today() : `${month}-01`));
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD(p => ({ ...p, [k]: v }));
+  const change = useLocalChange();
+  const input = toInput(d);
+
+  // Live checks with the same rules the server enforces.
+  const ready = d.startTime && d.endTime;
+  const sup = supervisors.find(s => s.id === input.supervisorId);
+  // Caught here rather than after an upload the server would refuse (which would drop the entry).
+  const problems = ready ? [...validateEntry(input),
+    ...(sup && (input.workDate < sup.startsOn || (sup.endsOn && input.workDate > sup.endsOn)) ? [`${sup.fullName} supervises you ${sup.endsOn ? `from ${sup.startsOn} to ${sup.endsOn}` : `from ${sup.startsOn}`}`] : []),
+    ...(input.workDate.startsWith(month) && isLocked(input.supervisorId) ? ['That month is signed and locked for this supervisor'] : [])] : [];
+  const preview = ready && !problems.length && input.workDate.startsWith(month)
+    ? evaluateMonth(month, [...entries.filter(e => e.id !== editing?.id && e.supervisorId === input.supervisorId), input], profile).summary : null; // this supervisor’s form only
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    const id = draftId;
+    const sameDay = entries.filter(e => e.id !== id && e.workDate === input.workDate);
+    setWarnings(findOverlaps<EntryInput>([...sameDay, input]).filter(p => p.includes(input))
+      .map(([a, b]) => { const o = a === input ? b : a; return `Overlaps ${time12(o.startTime)}–${time12(o.endTime)}` }));
+    await change({ kind: 'put', id, body: input, queuedAt: Date.now() }).finally(() => setSaving(false));
+    if (editing || copyOf) onDone(); else { setD(blank(d.supervisorId, d.workDate)); setDraftId(crypto.randomUUID()) }
+  }
+
+  return (
+    <form className="stack" onSubmit={(e: FormEvent) => { e.preventDefault(); void save() }}>
+      <div className="row">
+        <label>Date<input type="date" value={d.workDate} max={today()} onChange={e => set('workDate', e.target.value)} required /></label>
+        <label>Start<input type="time" value={d.startTime} onChange={e => set('startTime', e.target.value)} required /></label>
+        <label>End<input type="time" value={d.endTime} onChange={e => set('endTime', e.target.value)} required /></label>
+      </div>
+      <label>Supervisor
+        <select value={d.supervisorId} onChange={e => set('supervisorId', e.target.value)} required>
+          {supervisors.map(s => <option key={s.id} value={s.id}>{s.fullName}</option>)}
+        </select>
+      </label>
+      <div className="seg" role="radiogroup" aria-label="Hour type">
+        {(['independent', 'supervised'] as const).map(k => (
+          <button type="button" key={k} role="radio" aria-checked={d.kind === k} className={d.kind === k ? 'on' : ''} onClick={() => set('kind', k)}>
+            {k === 'independent' ? 'Independent' : 'Supervised'}<small>{k === 'independent' ? 'BCBA not present' : 'BCBA present'}</small>
+          </button>
+        ))}
+      </div>
+      <div className="row">
+        <label>Restricted hours<input type="number" min="0" step="0.05" value={d.restrictedHours} onChange={e => set('restrictedHours', e.target.value)} /></label>
+        {ready && !problems.length && <p className="muted small self-end">{hrs(durationMinutes(input))} h total · {hrs(durationMinutes(input) - input.restrictedMinutes)} h unrestricted</p>}
+      </div>
+      {d.kind === 'independent' && (
+        <label className="check">
+          <input type="checkbox" checked={d.observedAsync} onChange={e => set('observedAsync', e.target.checked)} />
+          My supervisor observed this session by recording (counts toward observation only)
+        </label>
+      )}
+      {d.kind === 'supervised' && (
+        <div className="row">
+          <label>Supervision<select value={d.isGroup ? 'group' : 'individual'} onChange={e => set('isGroup', e.target.value === 'group')}><option value="individual">Individual</option><option value="group">Group</option></select></label>
+          <label>Contact type<select value={d.contact ?? ''} onChange={e => set('contact', (e.target.value || null) as Draft['contact'])}><option value="">None</option><option value="contact">Contact</option><option value="observation">Observation with client</option></select></label>
+          <label>Format<select value={d.format ?? 'in_person'} onChange={e => set('format', e.target.value as Draft['format'])}><option value="in_person">In person</option><option value="online">Online</option></select></label>
+        </div>
+      )}
+      <label>Description of activity<textarea value={d.description} onChange={e => set('description', e.target.value)} maxLength={5000} rows={3} /></label>
+      <p className="muted small">Use client initials only — never full names.</p>
+      {problems.map(p => <p key={p} className="error">{p}</p>)}
+      {preview && <p className="notice">With this entry: <strong>{hrs(preview.totalMinutes)} h</strong> this month{supervisors.length > 1 ? ' with this supervisor' : ''} · <strong>{(preview.supervisedMinutes / preview.totalMinutes * 100).toFixed(1)}%</strong> supervised{targetsFor(profile).rules.minContacts && ` · ${preview.contacts} contacts`}</p>}
+      <div className="row">
+        <button className="primary" disabled={problems.length > 0 || saving}>{editing ? 'Save changes' : 'Save entry'}</button>
+        {editing && <button type="button" className="ghost" onClick={onDone}>Cancel</button>}
+      </div>
+      {warnings.map(w => <p key={w} className="notice">⚠ {w}</p>)}
+    </form>
+  );
+}
+
+export function EntriesTable({ entries, supervisors, month, traineeId, onEdit, onRepeat, editable = false, isLocked = () => false }: { entries: EntryDto[]; supervisors: { id: string; fullName: string }[]; month: string; traineeId?: string; onEdit?: (e: EntryDto) => void; onRepeat?: (e: EntryDto) => void; editable?: boolean; isLocked?: (e: EntryDto) => boolean }) {
+  const change = useLocalChange();
+  const [historyFor, setHistoryFor] = useState<string | null>(null), [commentFor, setCommentFor] = useState<string | null>(null);
+  const comments = useComments(month, traineeId).data ?? [], cols = editable ? 9 : 8;
+  const name = (id: string) => supervisors.find(s => s.id === id)?.fullName ?? '—';
+  const open = (id: string) => comments.filter(c => c.entryId === id && !c.resolvedAt).length;
+  if (!entries.length) return <p className="muted">No hours logged this month.</p>;
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Time</th><th>Type</th><th className="num">Restr.</th><th className="num">Unrestr.</th><th>Contact</th>{editable && <th>Supervisor</th>}<th className="num">Hours</th><th /></tr></thead>
+        <tbody>
+          {entries.map(e => {
+            const total = durationMinutes(e);
+            return [
+              <tr key={e.id} className={e.description ? 'has-desc' : ''}>
+                <td>{dateLabel(e.workDate)}{e.pending && <div className="muted small" title="Saved on this device; uploads automatically">☁ On device</div>}</td>
+                <td>{time12(e.startTime)}–{time12(e.endTime)}</td>
+                <td><span className={`tag ${e.kind}`}>{e.kind === 'independent' ? 'Independent' : e.isGroup ? 'Supervised · group' : 'Supervised'}</span>{e.observedAsync && <div className="muted small">Observed by recording</div>}</td>
+                <td className="num">{hrs(e.restrictedMinutes)}</td>
+                <td className="num">{hrs(total - e.restrictedMinutes)}</td>
+                <td>{e.contact === 'observation' ? 'Observation' : e.contact === 'contact' ? 'Contact' : ''}{e.format ? <span className="muted small"> · {e.format === 'online' ? 'Online' : 'In person'}</span> : null}</td>
+                {editable && <td>{name(e.supervisorId)}</td>}
+                <td className="num"><strong>{hrs(total)}</strong></td>
+                <td className="actions-cell">
+                  {!e.pending && <button className="ghost small" aria-expanded={historyFor === e.id} onClick={() => setHistoryFor(historyFor === e.id ? null : e.id)}>History</button>}
+                  {!e.pending && <button className="ghost small" aria-expanded={commentFor === e.id} onClick={() => setCommentFor(commentFor === e.id ? null : e.id)}>
+                    Comment{open(e.id) ? ` (${open(e.id)})` : ''}
+                  </button>}
+                  {editable && <button className="ghost small" title="Copy to today" onClick={() => onRepeat?.(e)}>Repeat</button>}
+                  {editable && isLocked(e) && <span className="muted small" title="Signed by your supervisor">🔒 Signed</span>}
+                  {editable && !isLocked(e) && <>
+                    <button className="ghost small" onClick={() => onEdit?.(e)}>Edit</button>
+                    <button className="ghost small" onClick={() => confirm('Delete this entry?') && void change({ kind: 'delete', id: e.id, queuedAt: Date.now() })}>Delete</button>
+                  </>}
+                </td>
+              </tr>,
+              e.description && <tr key={`${e.id}-d`} className="desc"><td colSpan={cols}>{e.description}</td></tr>,
+              historyFor === e.id && <tr key={`${e.id}-h`} className="desc"><td colSpan={cols}><EntryHistory id={e.id} /></td></tr>,
+              (commentFor === e.id || open(e.id) > 0) && <tr key={`${e.id}-c`} className="desc"><td colSpan={cols}>
+                <CommentThread entryId={e.id} comments={comments.filter(c => c.entryId === e.id)} composing={commentFor === e.id} onDone={() => setCommentFor(null)} />
+              </td></tr>,
+            ];
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SignOff({ month, supervisors, me, edition, withHours }: { month: string; supervisors: Supervisor[]; me: Me; edition: Edition; withHours: Set<string | undefined> }) {
+  const [signing, setSigning] = useState<string | null>(null);
+  const verifications = useVerifications(month), invalidate = useInvalidate(), { pending } = useSyncState();
+  const ext = new Map((useExternalSignatures().data ?? []).filter(x => x.month.startsWith(month)).map(x => [x.supervisorId, x]));
+  const removeExt = useMutation({ mutationFn: (id: string) => api(`/external-signatures/${id}`, 'DELETE'), onSuccess: () => void invalidate() });
+  const pdf = useMutation({ mutationFn: (s: Supervisor) => download(`/verifications/${month}/form.pdf?supervisorId=${s.id}`, `BACB monthly form ${month} ${s.fullName}.pdf`) });
+  const sign = useMutation({
+    mutationFn: (signature: string) => api(`/verifications/${month}/sign`, 'POST', { supervisorId: signing, signature, attest: true }),
+    onSuccess: () => { setSigning(null); void invalidate() },
+  });
+  return (
+    <section className="card">
+      <h2>Monthly sign-off</h2>
+      <ul className="people">
+        {supervisors.map(s => {
+          const v = verifications.data?.find(x => x.supervisorId === s.id);
+          return (
+            <li key={s.id}>
+              <strong>{s.fullName}</strong>
+              {v?.supervisorSignedAt ? <span className="ok">✓ Signed & locked</span>
+                : v?.traineeSignedAt ? <span className="muted small">You signed · waiting on supervisor <button className="ghost small" disabled={pending > 0} onClick={() => setSigning(s.id)}>Re-sign</button></span>
+                : <button className="small" disabled={month >= currentMonth() || sign.isPending || pending > 0} title={month >= currentMonth() ? 'Sign once the month is over' : undefined} onClick={() => setSigning(s.id)}>Sign {monthLabel(month, true)}</button>}
+              {!v?.supervisorSignedAt && withHours.has(s.id) && (ext.get(s.id)
+                ? <span className="ok small">✓ Signed outside Fieldtrack {ext.get(s.id)!.signedOn} <button className="ghost small" onClick={() => removeExt.mutate(ext.get(s.id)!.id)}>Undo</button></span>
+                : <><Deadline month={month} />{month < currentMonth() && <OutsideSignature month={month} supervisorId={s.id} />}</>)}
+              <button className="ghost small" disabled={pdf.isPending || pending > 0} onClick={() => pdf.mutate(s)}>BACB form (PDF)</button>
+              {signing === s.id && <SignForm statements={ATTESTATIONS[edition].statements} name={me.fullName} cta={`Sign ${monthLabel(month, true)} for ${s.fullName}`} busy={sign.isPending || pending > 0} onSign={sign.mutate} onCancel={() => setSigning(null)} />}
+            </li>
+          );
+        })}
+      </ul>
+      {pending > 0 && <p className="notice">Waiting for {pending} change(s) to upload before you can sign.</p>}
+      <p className="muted small">Signing sends this month's hours under that supervisor for their countersignature. Re-sign if you edit entries afterward.</p>
+      <ErrorText error={sign.error ?? pdf.error} />
+    </section>
+  );
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  workDate: 'Date', startTime: 'Start', endTime: 'End', kind: 'Type', restrictedMinutes: 'Restricted minutes', isGroup: 'Group', observedAsync: 'Observed by recording',
+  contact: 'Contact', format: 'Format', description: 'Description', supervisorId: 'Supervisor', deletedAt: 'Deleted',
+};
+const showValue = (field: string, v: unknown) =>
+  v === null || v === '' ? 'none' : field.endsWith('Time') ? time12(String(v).slice(0, 5)) : field === 'workDate' ? dateLabel(String(v)) : String(v);
+const ACTION_WORD = { CREATE: 'Added', UPDATE: 'Edited', DELETE: 'Deleted' } as const;
+
+function ChangeLine({ c }: { c: Change }) {
+  const fields = c.changes.filter(x => x.field !== 'deletedAt');
+  return (
+    <li>
+      <span className="muted small">{new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>{' '}
+      <strong>{ACTION_WORD[c.action]}</strong> {c.workDate && <>the {dateLabel(c.workDate)} entry</>}{c.actor && <span className="muted"> by {c.actor.name}</span>}
+      {c.minutesDelta !== 0 && <strong className="delta"> {c.minutesDelta > 0 ? '+' : '−'}{hrs(Math.abs(c.minutesDelta))} h</strong>}
+      {fields.length > 0 && <div className="muted small">{fields.map(x => `${FIELD_LABELS[x.field] ?? x.field}: ${showValue(x.field, x.from)} → ${showValue(x.field, x.to)}`).join(' · ')}</div>}
+    </li>
+  );
+}
+
+function EntryHistory({ id }: { id: string }) {
+  const h = useHistory(id);
+  if (h.isPending) return <span className="muted small">Loading history…</span>;
+  return h.data ? <ul className="history">{h.data.map(c => <ChangeLine key={c.auditId} c={c} />)}</ul> : <ErrorText error={h.error} />;
+}
+
+/** Answers "why did my total change?" for the month, newest first. */
+function MonthChanges({ month }: { month: string }) {
+  const changes = useChanges(month);
+  const list = [...(changes.data ?? [])].reverse();
+  return (
+    <section className="card">
+      <h2>What changed in {monthLabel(month)}</h2>
+      {!list.length ? <p className="muted">No changes yet.</p> : <ul className="history">{list.slice(0, 15).map(c => <ChangeLine key={c.auditId} c={c} />)}</ul>}
+      <p className="muted small">Every add, edit and delete is recorded permanently and can't be altered.</p>
+    </section>
+  );
+}
+
+/** Which BACB standard the trainee is held to. Signed months always keep the rules they were signed under. */
+function StandardSettings({ me }: { me: Me }) {
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: (patch: Partial<Pick<Me, 'credential' | 'fieldworkType' | 'rulesEdition' | 'bacbId' | 'fieldworkState' | 'fieldworkCountry'>>) => api<Me>('/me', 'PATCH', patch),
+    onSuccess: user => { qc.setQueryData(['me'], user); void qc.invalidateQueries({ queryKey: ['progress'] }) },
+  });
+  return (
+    <section className="card stack">
+      <h2>Your standard</h2>
+      <label>When will you apply for certification?
+        <select value={me.rulesEdition ?? '2027'} onChange={e => save.mutate({ rulesEdition: e.target.value as Me['rulesEdition'] })}>
+          <option value="2022">Before January 1, 2027 (2022 rules)</option>
+          <option value="2027">On or after January 1, 2027 (2027 rules)</option>
+        </select>
+      </label>
+      <div className="row">
+        <label>Credential
+          <select value={me.credential ?? 'bcba'} onChange={e => save.mutate({ credential: e.target.value as Me['credential'] })}>
+            <option value="bcba">BCBA</option><option value="bcaba">BCaBA</option>
+          </select>
+        </label>
+        <label>Fieldwork type
+          <select value={me.fieldworkType ?? 'concentrated'} onChange={e => save.mutate({ fieldworkType: e.target.value as Me['fieldworkType'] })}>
+            <option value="concentrated">Concentrated</option><option value="supervised">Supervised</option>
+          </select>
+        </label>
+      </div>
+      <p className="muted small">The BACB applies rules by your application date, not by when you worked. Months already signed keep the rules they were signed under.</p>
+      <h3>For your BACB forms</h3>
+      <div className="row">
+        {([['bacbId', 'BACB ID'], ['fieldworkState', 'State where fieldwork occurs'], ['fieldworkCountry', 'Country']] as const).map(([k, label]) => (
+          <label key={k}>{label}
+            <input defaultValue={me[k] ?? ''} maxLength={100} onBlur={e => e.target.value.trim() !== (me[k] ?? '') && save.mutate({ [k]: e.target.value })} />
+          </label>
+        ))}
+      </div>
+      <ReminderToggle me={me} />
+      {(!me.bacbId || !me.fieldworkState || !me.fieldworkCountry) && <p className="notice">The BACB denies verification forms with missing information. Fill these in before you download forms.</p>}
+      <ErrorText error={save.error} />
+    </section>
+  );
+}
+
+/** "When will I finish?" from recent pace, and what it takes to finish by a chosen month. */
+function Pace({ program, profile }: { program: ProgramResult; profile: Profile }) {
+  const [target, setTarget] = useState(() => { try { return localStorage.getItem('ft.finishBy') ?? '' } catch { return '' } });
+  if (program.complete) return <p className="notice">🎉 You've met the fieldwork hours. Keep your signed forms for 7 years.</p>;
+  const mixedNote = program.mixed && (
+    <p className={program.mixed === 'estimate' ? 'notice' : 'muted small center-text'}>
+      Mixed fieldwork: {Math.floor(program.countableByType.supervised / 60)} supervised + {Math.floor(program.countableByType.concentrated / 60)} concentrated hours. Per the BACB, concentrated hours count ×1.33 toward the supervised total (forms still show actual hours).
+      {program.mixed === 'estimate' && ' The BACB publishes this rule for BCBA; confirm BCaBA totals with the BACB.'}
+    </p>
+  );
+  const now = currentMonth(), f = forecast(program, now), plan = target ? planFor(program, profile, now, target) : null;
+  const pick = (v: string) => { setTarget(v); try { localStorage.setItem('ft.finishBy', v) } catch { /* private mode */ } };
+  return (
+    <div className="pace muted small center-text">
+      {mixedNote}
+      {program.unverified.map(u => <p key={u} className="muted small">Note: {u}.</p>)}
+      <p>{f ? <>At your recent pace ({Math.round(f.minutesPerMonth / 60)} countable h/month) you'll finish around <strong>{monthLabel(f.finishMonth)}</strong>.</> : 'Your projected finish date appears after your first fully countable month.'}</p>
+      {program.windowEnds && <p className={f && f.finishMonth > program.windowEnds ? 'notice' : ''}>
+        Your BACB 5-year window ends {monthLabel(program.windowEnds)}.{f && f.finishMonth > program.windowEnds && ' At your current pace you won’t finish in time: plan more hours per month.'}
+      </p>}
+      <p>
+        <label className="inline">Want to finish by <input type="month" min={now} max={program.windowEnds ?? undefined} value={target} onChange={e => pick(e.target.value)} /></label>
+        {plan && (plan.feasible
+          ? <> → log about <strong>{Math.ceil(plan.minutesPerWeek / 60)} h/week</strong> ({Math.ceil(plan.minutesPerMonth / 60)} h/month), with every month meeting its requirements.</>
+          : <> → <strong>not possible</strong>: that needs {Math.ceil(plan.minutesPerMonth / 60)} h/month, over the {plan.maxMonthlyMinutes / 60} h monthly maximum.</>)}
+      </p>
+    </div>
+  );
+}
+
+/** Review notes on one entry: open ones always show; either person can resolve; composing adds a new one. */
+function CommentThread({ entryId, comments, composing, onDone }: { entryId: string; comments: Comment[]; composing: boolean; onDone: () => void }) {
+  const qc = useQueryClient(), [body, setBody] = useState('');
+  const refresh = () => qc.invalidateQueries({ queryKey: ['comments'] });
+  const add = useMutation({ mutationFn: () => api(`/entries/${entryId}/comments`, 'POST', { body }), onSuccess: () => { setBody(''); onDone(); void refresh() } });
+  const resolve = useMutation({ mutationFn: (id: string) => api(`/comments/${id}/resolve`, 'POST'), onSuccess: () => void refresh() });
+  return (
+    <div className="stack comments">
+      {comments.filter(c => composing || !c.resolvedAt).map(c => (
+        <div key={c.id} className={c.resolvedAt ? 'comment resolved' : 'comment'}>
+          <span className="small"><strong>{c.authorName ?? 'Someone'}</strong> <span className="muted">{new Date(c.createdAt).toLocaleDateString()}</span></span>
+          <span>{c.body}</span>
+          {c.resolvedAt ? <span className="muted small">✓ Resolved</span> : <button className="ghost small" disabled={resolve.isPending} onClick={() => resolve.mutate(c.id)}>Resolve</button>}
+        </div>
+      ))}
+      {composing && (
+        <form className="row" onSubmit={e => { e.preventDefault(); add.mutate() }}>
+          <input aria-label="New comment" placeholder="e.g. End time should be 3:30" value={body} maxLength={2000} onChange={e => setBody(e.target.value)} autoFocus />
+          <button className="small" disabled={!body.trim() || add.isPending}>Add comment</button>
+        </form>
+      )}
+      <ErrorText error={add.error ?? resolve.error} />
+    </div>
+  );
+}
+
+/** Fieldtrack Pro via Stripe Checkout; hidden until billing is configured. Card details stay with Stripe. */
+function BillingCard() {
+  const billing = useBilling(), [params] = useSearchParams();
+  const go = useMutation({
+    mutationFn: (path: '/billing/checkout' | '/billing/portal') => api<{ url: string }>(path, 'POST'),
+    onSuccess: ({ url }) => location.assign(url),
+  });
+  const b = billing.data;
+  if (!b?.enabled) return null;
+  const active = ['active', 'trialing', 'past_due'].includes(b.status);
+  return (
+    <section className="card stack">
+      <h2>Fieldtrack Pro</h2>
+      {params.get('billing') === 'success' && !active && <p className="notice">Payment received. Your plan activates in a moment.</p>}
+      {active
+        ? <p>{b.status === 'past_due' ? '⚠ Payment failed. Update your card to keep Pro.' : '✓ Active'}{b.currentPeriodEnd && <span className="muted small"> · renews {new Date(b.currentPeriodEnd).toLocaleDateString()}</span>}</p>
+        : <p className="muted">Support Fieldtrack and get Pro features.</p>}
+      <button className={active ? 'ghost small' : 'primary'} disabled={go.isPending} onClick={() => go.mutate(active || b.status === 'canceled' ? '/billing/portal' : '/billing/checkout')}>
+        {active ? 'Manage billing' : b.status === 'canceled' ? 'Resubscribe' : 'Upgrade to Pro'}
+      </button>
+      <ErrorText error={go.error} />
+    </section>
+  );
+}
+
+/** First-run checklist; disappears once everything's done. */
+function GettingStarted({ me, linked, logged }: { me: Me; linked: boolean; logged: boolean }) {
+  const steps = [
+    { done: linked, label: 'Link your supervisor (invite code, or send them a link)' },
+    { done: logged, label: 'Log your first hours (or import them from a spreadsheet)' },
+    { done: !!(me.bacbId && me.fieldworkState && me.fieldworkCountry), label: 'Add your BACB ID, state and country for your forms (Settings, below)' },
+  ];
+  if (steps.every(s => s.done)) return null;
+  return (
+    <section className="card stack">
+      <h2>Getting started</h2>
+      <ol className="setup-steps">{steps.map(s => <li key={s.label} className={s.done ? 'done' : ''}><span>{s.done ? '✓' : '○'}</span> {s.label}</li>)}</ol>
+      <p className="muted small">New to how the BACB checks hours? <Link to="/help">Read the 2-minute guide</Link>.</p>
+    </section>
+  );
+}
+
+/** For forms signed on paper or in another tracker: record when, so the deadline rule doesn't drop the month. */
+function OutsideSignature({ month, supervisorId }: { month: string; supervisorId: string }) {
+  const [open, setOpen] = useState(false), [date, setDate] = useState(''), invalidate = useInvalidate();
+  const save = useMutation({ mutationFn: () => api('/external-signatures', 'PUT', { supervisorId, month, signedOn: date }), onSuccess: () => { setOpen(false); void invalidate() } });
+  if (!open) return <button className="ghost small" onClick={() => setOpen(true)}>Signed outside Fieldtrack…</button>;
+  return (
+    <form className="row" onSubmit={e => { e.preventDefault(); save.mutate() }}>
+      <label>Date both of you had signed<input type="date" required value={date} max={today()} onChange={e => setDate(e.target.value)} /></label>
+      <button className="small" disabled={save.isPending}>Save</button>
+      <button type="button" className="ghost small" onClick={() => setOpen(false)}>Cancel</button>
+      <ErrorText error={save.error} />
+    </form>
+  );
+}
+
+/** Changed supervisors? End the link so no new hours go under them (their access to past hours stays for the records). */
+function EndSupervision({ supervisor }: { supervisor: Supervisor }) {
+  const [open, setOpen] = useState(false), [date, setDate] = useState(today()), invalidate = useInvalidate();
+  const end = useMutation({ mutationFn: () => api(`/supervisions/${supervisor.id}`, 'PATCH', { endsOn: date }), onSuccess: () => { setOpen(false); void invalidate() } });
+  if (!open) return <button className="ghost small" onClick={() => setOpen(true)}>End supervision…</button>;
+  return (
+    <form className="row" onSubmit={e => { e.preventDefault(); end.mutate() }}>
+      <label>Last day {supervisor.fullName} supervised you<input type="date" required value={date} min={supervisor.startsOn} onChange={e => setDate(e.target.value)} /></label>
+      <button className="small" disabled={end.isPending}>End</button>
+      <button type="button" className="ghost small" onClick={() => setOpen(false)}>Cancel</button>
+      <ErrorText error={end.error} />
+    </form>
+  );
+}

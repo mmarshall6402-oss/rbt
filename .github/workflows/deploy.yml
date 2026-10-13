@@ -1,0 +1,40 @@
+name: Deploy
+
+# main → staging automatically → production after a required reviewer approves (GitHub environment protection).
+# Each GitHub environment ("staging", "production") holds variables copied from `terraform output app`.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false # never interrupt a migration or rollout
+
+permissions:
+  contents: read
+  id-token: write # OIDC to AWS: no stored keys
+
+jobs:
+  build-image:
+    # Off until AWS exists: set repository variable DEPLOY_ENABLED=true after the first terraform apply.
+    if: vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build once; every environment deploys this exact image
+        uses: docker/build-push-action@v6
+        with: { context: ., file: apps/api/Dockerfile, tags: 'api:${{ github.sha }}', outputs: 'type=docker,dest=/tmp/api.tar' }
+      - uses: actions/upload-artifact@v4
+        with: { name: api-image, path: /tmp/api.tar, retention-days: 3 }
+
+  staging:
+    needs: build-image
+    uses: ./.github/workflows/deploy-env.yml
+    with: { environment: staging, rehearse_migrations: false }
+
+  production:
+    needs: staging
+    uses: ./.github/workflows/deploy-env.yml
+    with: { environment: production, rehearse_migrations: true }
