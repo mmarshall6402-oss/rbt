@@ -1,9 +1,19 @@
 -- Representative data for migration tests: loaded onto the base branch's schema, then the PR's
--- migrations run on top. Uses only columns from 001_init.sql so it loads on any later base.
-insert into users (id, cognito_sub, email, full_name, role, fieldwork_type) values
-  ('11111111-1111-4111-8111-111111111111', 'seed-trainee', 'trainee@seed.test', 'Seed Trainee', 'trainee', 'concentrated'),
-  ('22222222-2222-4222-8222-222222222222', 'seed-super', 'super@seed.test', 'Seed Supervisor', 'supervisor', null),
-  ('33333333-3333-4333-8333-333333333333', 'seed-trainee2', 'trainee2@seed.test', 'Seed Trainee Two', 'trainee', 'supervised');
+-- migrations run on top. Loads on any base from 001_init.sql onward.
+-- Bases from 004_standards.sql on require a trainee's standard; plpgsql only plans the branch it runs.
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_name = 'users' and column_name = 'credential') then
+    insert into users (id, cognito_sub, email, full_name, role, fieldwork_type, credential, rules_edition) values
+      ('11111111-1111-4111-8111-111111111111', 'seed-trainee', 'trainee@seed.test', 'Seed Trainee', 'trainee', 'concentrated', 'bcba', '2022'),
+      ('22222222-2222-4222-8222-222222222222', 'seed-super', 'super@seed.test', 'Seed Supervisor', 'supervisor', null, null, null),
+      ('33333333-3333-4333-8333-333333333333', 'seed-trainee2', 'trainee2@seed.test', 'Seed Trainee Two', 'trainee', 'supervised', 'bcba', '2022');
+  else
+    insert into users (id, cognito_sub, email, full_name, role, fieldwork_type) values
+      ('11111111-1111-4111-8111-111111111111', 'seed-trainee', 'trainee@seed.test', 'Seed Trainee', 'trainee', 'concentrated'),
+      ('22222222-2222-4222-8222-222222222222', 'seed-super', 'super@seed.test', 'Seed Supervisor', 'supervisor', null),
+      ('33333333-3333-4333-8333-333333333333', 'seed-trainee2', 'trainee2@seed.test', 'Seed Trainee Two', 'trainee', 'supervised');
+  end if;
+end $$;
 
 insert into supervisions (trainee_id, supervisor_id, starts_on, ends_on) values
   ('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '2026-01-01', null),
