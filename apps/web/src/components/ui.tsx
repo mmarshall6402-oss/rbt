@@ -189,7 +189,7 @@ export function SyncBadge() {
   );
 }
 
-export function AppShell({ name, children, nav }: { name: string; nav?: ReactNode; children: ReactNode }) {
+export function AppShell({ name, children, nav, progress }: { name: string; nav?: ReactNode; progress?: ReactNode; children: ReactNode }) {
   return (
     <>
       <header className="topbar">
@@ -201,6 +201,7 @@ export function AppShell({ name, children, nav }: { name: string; nav?: ReactNod
           <span className="muted hide-sm">{name}</span>
           <button className="ghost" onClick={() => void safeSignOut()}>Sign out</button>
         </div>
+        {progress}
       </header>
       <main className="app">{children}</main>
     </>

@@ -281,6 +281,16 @@ describe.skipIf(!url)('API', () => {
     expect((await trainee.get('/entries?month=2026-09')).json()[0].observedAsync).toBe(true);
   });
 
+  it('entries take an optional BACB task list area; trainees set their own monthly goal', async () => {
+    expect((await trainee.log({ taskArea: 'G' })).statusCode).toBe(201);
+    expect((await trainee.log({ taskArea: 'Z' })).statusCode).toBe(400);
+    expect((await trainee.get('/entries?month=2026-09')).json().map((e: { taskArea: string | null }) => e.taskArea)).toEqual(['G']);
+    expect((await trainee.patch('/me', { monthlyGoalMinutes: 100 * 60 })).json().monthlyGoalMinutes).toBe(6000);
+    expect((await trainee.patch('/me', { monthlyGoalMinutes: 200 * 60 })).statusCode).toBe(400); // over the 160 h monthly max
+    expect((await trainee.patch('/me', { monthlyGoalMinutes: null })).json().monthlyGoalMinutes).toBeNull();
+    expect((await sup.patch('/me', { monthlyGoalMinutes: 6000 })).statusCode).toBe(400); // supervisors have no hours goal
+  });
+
   describe('signing deadline', () => {
     it('a form unsigned past its deadline counts nothing, unless it was signed outside Fieldtrack in time', async () => {
       await logPassingMonth('2026-08'); // due 2026-09-30; today is 2026-10-15
@@ -482,8 +492,8 @@ describe.skipIf(!url)('API', () => {
     expect(res.headers['content-type']).toBe('text/csv; charset=utf-8');
     const lines = res.body.trim().split('\r\n');
     expect(lines).toHaveLength(3);
-    expect(lines[1]).toBe('"2026-08-01","08:00","10:00","2.000","supervised","Sup","0.000","2.000","no","contact","","said ""hi"""');
-    expect(lines[2]).toContain(`"1.500","no","","","'=HYPERLINK(""x"")"`);
+    expect(lines[1]).toBe('"2026-08-01","08:00","10:00","2.000","supervised","Sup","0.000","2.000","no","contact","","","said ""hi"""');
+    expect(lines[2]).toContain(`"1.500","no","","","","'=HYPERLINK(""x"")"`);
     expect((await sup2.get(`/entries/export.csv?traineeId=${ids.other}`)).statusCode).toBe(404);
   });
 

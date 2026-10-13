@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import { z, ZodError } from 'zod';
-import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, deadlineDay, formLost, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, type Entry, type FieldworkType, type Edition, type FormStandard, type Profile } from '@fieldtrack/rules';
+import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, deadlineDay, formLost, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, TASK_AREAS, type TaskArea, type Entry, type FieldworkType, type Edition, type FormStandard, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
 import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
@@ -32,12 +32,13 @@ const EntryBody = z.object({
   format: z.enum(['in_person', 'online']).nullable().default(null),
   description: z.string().max(5000).default(''),
   observedAsync: z.boolean().default(false),
+  taskArea: z.enum(Object.keys(TASK_AREAS) as [TaskArea, ...TaskArea[]]).nullable().default(null),
 });
 const FieldworkTypeEnum = z.enum(['supervised', 'concentrated']);
 const CredentialEnum = z.enum(['bcba', 'bcaba']);
 const EditionEnum = z.enum(['2022', '2027']);
 const Place = z.string().trim().max(100).transform(v => v || null);
-const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum, fieldworkState: Place, fieldworkCountry: Place, bacbId: Place, emailReminders: z.boolean() }).partial();
+const ProfileBody = z.object({ fieldworkType: FieldworkTypeEnum, credential: CredentialEnum, rulesEdition: EditionEnum, fieldworkState: Place, fieldworkCountry: Place, bacbId: Place, emailReminders: z.boolean(), monthlyGoalMinutes: z.number().int().min(1200).max(9600).nullable() }).partial();
 
 const SignupBody = z.discriminatedUnion('role', [
   z.object({
@@ -60,7 +61,7 @@ const newInviteCode = () => Array.from(randomBytes(8), b => CODE_ALPHABET[b % CO
 /** JSON with sorted keys: jsonb reorders keys, so compare snapshots canonically. */
 const canonical = (v: unknown) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
 
-const ENTRY_FIELDS = ['supervisorId', 'organizationId', 'workDate', 'startTime', 'endTime', 'kind', 'restrictedMinutes', 'isGroup', 'contact', 'format', 'description', 'observedAsync'] as const;
+const ENTRY_FIELDS = ['supervisorId', 'organizationId', 'workDate', 'startTime', 'endTime', 'kind', 'restrictedMinutes', 'isGroup', 'contact', 'format', 'description', 'observedAsync', 'taskArea'] as const;
 // Snapshot keys arrive camelCased (CamelCasePlugin converts nested JSON keys too).
 const AUDIT_IGNORED = new Set(['id', 'traineeId', 'organizationId', 'createdAt', 'updatedAt']);
 type AuditRow = { id: string; rowId: string; action: string; at: Date; oldRow: unknown; newRow: unknown; actorId: string | null; actorName: string | null };
@@ -349,9 +350,9 @@ export function buildApp({ db, verify, logger = true, billing, clock = () => new
         const rows = (await listEntries(trx, s)).reverse().map(e => {
           const min = durationMinutes(e);
           return [e.workDate, e.startTime.slice(0, 5), e.endTime.slice(0, 5), (min / 60).toFixed(3), e.kind, names.get(e.supervisorId) ?? '',
-            (e.restrictedMinutes / 60).toFixed(3), ((min - e.restrictedMinutes) / 60).toFixed(3), e.isGroup ? 'yes' : 'no', e.contact ?? (e.observedAsync ? 'recorded observation' : ''), e.format ?? '', e.description];
+            (e.restrictedMinutes / 60).toFixed(3), ((min - e.restrictedMinutes) / 60).toFixed(3), e.isGroup ? 'yes' : 'no', e.contact ?? (e.observedAsync ? 'recorded observation' : ''), e.format ?? '', e.taskArea ?? '', e.description];
         });
-        return toCsv([['Date', 'Start', 'End', 'Hours', 'Type', 'Supervisor', 'Restricted hours', 'Unrestricted hours', 'Group', 'Contact', 'Format', 'Description'], ...rows]);
+        return toCsv([['Date', 'Start', 'End', 'Hours', 'Type', 'Supervisor', 'Restricted hours', 'Unrestricted hours', 'Group', 'Contact', 'Format', 'Task list area', 'Description'], ...rows]);
       });
       return reply.type('text/csv; charset=utf-8').header('cache-control', 'no-store').header('content-disposition', 'attachment; filename="fieldwork-hours.csv"').send(csv);
     });

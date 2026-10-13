@@ -1,22 +1,26 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ATTESTATIONS, RULESETS, durationMinutes, evaluateForms, forecast, formLost, signDeadline, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
+import { ATTESTATIONS, RULESETS, TASK_AREAS, durationMinutes, evaluateForms, forecast, formLost, planFor, evaluateMonth, findOverlaps, targetsFor, validateEntry, type Edition, type Profile, type ProgramResult } from '@fieldtrack/rules';
 import { api, download, profileOf, useBilling, useExternalSignatures, useComments, useFinals, type Comment, useChanges, useEntries, useHistory, useProgress, useSupervisors, useVerifications, type Change, type EntryDto, type EntryInput, type Me, type Supervisor } from '../api';
 import { enqueue, useSyncState, type Op } from '../sync';
 import { ImportHours } from './Import';
-import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, Checklist, ErrorText, HoursTrend, MonthNav, MonthRings, Ring, currentMonth, standardLabel, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
+import { HoursLeft, MonthStrip, ProgressBar, RecentEntries } from '../components/left';
+import { GoalCard, Greeting, Reports, TabBar } from '../components/home';
+import { AppShell, Deadline, ReminderToggle, SignForm, SyncBadge, ErrorText, HoursTrend, MonthNav, countableNote, currentMonth, dateLabel, hrs, monthLabel, time12, useMonthParam } from '../components/ui';
 
 const today = () => new Date().toLocaleDateString('en-CA');
-type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string };
+type RMode = 'unrestricted' | 'restricted' | 'mixed';
+type Draft = Omit<EntryInput, 'restrictedMinutes'> & { restrictedHours: string; rMode: RMode };
 const blank = (supervisorId = '', workDate = today()): Draft =>
-  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', isGroup: false, contact: null, format: null, description: '', observedAsync: false });
+  ({ supervisorId, workDate, startTime: '', endTime: '', kind: 'independent', restrictedHours: '0', rMode: 'unrestricted', isGroup: false, contact: null, format: null, description: '', observedAsync: false, taskArea: null });
 const fromEntry = (e: EntryDto, workDate = e.workDate): Draft => ({
   supervisorId: e.supervisorId, workDate, startTime: e.startTime, endTime: e.endTime, kind: e.kind, restrictedHours: String(e.restrictedMinutes / 60),
-  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description, observedAsync: !!e.observedAsync,
+  rMode: !e.restrictedMinutes ? 'unrestricted' : e.restrictedMinutes >= durationMinutes(e) ? 'restricted' : 'mixed',
+  isGroup: e.isGroup, contact: e.contact, format: e.format, description: e.description, observedAsync: !!e.observedAsync, taskArea: e.taskArea ?? null,
 });
-const toInput = ({ restrictedHours, ...d }: Draft): EntryInput => ({
-  ...d, restrictedMinutes: Math.round((Number(restrictedHours) || 0) * 60),
+const toInput = ({ restrictedHours, rMode, ...d }: Draft): EntryInput => ({
+  ...d, restrictedMinutes: rMode === 'unrestricted' ? 0 : rMode === 'restricted' && d.startTime && d.endTime ? durationMinutes(d) : Math.round((Number(restrictedHours) || 0) * 60),
   ...(d.kind === 'independent' ? { isGroup: false, contact: null, format: null } : { format: d.format ?? 'in_person', observedAsync: false }),
 });
 
@@ -43,7 +47,8 @@ export function TraineeDashboard({ me }: { me: Me }) {
   const [editing, setEditing] = useState<EntryDto | null>(null), [copying, setCopying] = useState<EntryDto | null>(null);
 
   return (
-    <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}>
+    <AppShell name={me.fullName} nav={<><MonthNav month={month} onChange={setMonth} /><SyncBadge /></>}
+      progress={progress.data && <ProgressBar program={progress.data} m={result.data && (lost ? { ...result.data, lost: true } : result.data)} />}>
       {supervisors.data?.length === 0 && <LinkSupervisor first />}
       <GettingStarted me={me} linked={!!supervisors.data?.length} logged={!!progress.data?.months.length || !!entries.data?.length} />
 
@@ -57,63 +62,57 @@ export function TraineeDashboard({ me }: { me: Me }) {
         </div>
       )}
 
-      <section className="rings-row">
-        {progress.data && (
-          <>
-            <Ring value={progress.data.countableMinutes} max={progress.data.requiredMinutes} display={`${Math.floor(progress.data.countableMinutes / 60)}`}
-              label={`of ${progress.data.requiredMinutes / 60} hours`} sub="Countable total" />
-            <Ring value={progress.data.unrestrictedPercent} max={60} display={`${progress.data.unrestrictedPercent.toFixed(0)}%`}
-              label="Unrestricted (60%)" sub="Across counted months" ok={progress.data.countableMinutes ? progress.data.unrestrictedOk : undefined} />
-          </>
-        )}
-        {result.data && <MonthRings m={result.data} profile={{ ...profile, ...signedStd(month, form?.supervisorId), type: result.data.type ?? profile.type }} />}
-      </section>
-      {progress.data && <Pace program={progress.data} profile={profile} />}
+      <Greeting me={me} />
+      {progress.data && <MonthStrip program={progress.data} profile={profile} month={month} onPick={setMonth} />}
+      {entries.data && <GoalCard me={me} forms={forms} month={month} profile={profile} />}
+      {progress.data && result.data && <HoursLeft program={progress.data} m={result.data} profile={{ ...profile, ...signedStd(month, form?.supervisorId), type: result.data.type ?? profile.type }} lost={lost} />}
+      {!result.data && <ErrorText error={result.error} />}
 
       <div className="cols">
-        <section className="card">
+        <section className="card" id="log">
           <h2>{editing ? 'Edit entry' : 'Log hours'}</h2>
           {supervisors.data && supervisors.data.length > 0
             ? <EntryForm key={editing?.id ?? (copying ? `copy-${copying.id}` : `new-${month}`)} month={month} profile={profile} supervisors={supervisors.data} entries={entries.data ?? []} editing={editing} copyOf={copying} isLocked={sid => locked.has(sid)} onDone={() => { setEditing(null); setCopying(null) }} />
             : <p className="muted">Link a supervisor to start logging.</p>}
         </section>
         <div className="stack">
-          <section className="card">
-            <h2>{monthLabel(month)} requirements{forms.length > 1 && form?.supervisorId && ` · ${names[form.supervisorId] ?? ''}`}</h2>
-            <p className="muted small">{standardLabel(profile)}{forms.length > 1 && ' · checked separately for each supervisor’s form'}</p>
-            {lost && <p className="notice">⚠ This form wasn't signed by {signDeadline(month)}, so per the BACB none of its hours count. Signed it elsewhere in time? Record that under Monthly sign-off.</p>}
-            {result.data ? <Checklist m={lost ? { ...result.data, lost: true, countableMinutes: 0 } : result.data} /> : <ErrorText error={result.error} />}
-          </section>
+          <RecentEntries entries={entries.data ?? []} />
           {supervisors.data && supervisors.data.length > 0 && <SignOff month={month} supervisors={supervisors.data} me={me} edition={profile.edition!} withHours={new Set(forms.map(f => f.supervisorId))} />}
         </div>
       </div>
+      <Reports entries={entries.data ?? []} month={month} />
+      {progress.data && <Pace program={progress.data} profile={profile} />}
 
-      <section className="card">
-        <div className="row spread"><h2>Entries</h2><span className="row">Export all hours{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}`, `fieldwork-hours.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div>
+      <section className="card" id="entries">
+        <div className="row spread"><h2>All entries · {monthLabel(month)}</h2><span className="row">Export all hours{(['pdf', 'csv'] as const).map(t => <button key={t} className="ghost small" onClick={() => void download(`/entries/export.${t}`, `fieldwork-hours.${t}`).catch(e => alert(e.message))}>{t.toUpperCase()}</button>)}</span></div>
+        {result.data && countableNote(lost ? { ...result.data, lost: true, countableMinutes: 0 } : result.data) && <p className="muted small">{countableNote(lost ? { ...result.data, lost: true, countableMinutes: 0 } : result.data)}</p>}
         <EntriesTable entries={entries.data ?? []} supervisors={supervisors.data ?? []} month={month} onEdit={e => { setCopying(null); setEditing(e); scrollTo({ top: 0, behavior: 'smooth' }) }} onRepeat={e => { setEditing(null); setCopying(e); scrollTo({ top: 0, behavior: 'smooth' }) }} editable isLocked={e => locked.has(e.supervisorId)} />
       </section>
 
-      <MonthChanges month={month} />
-
-      <div className="cols">
-        <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} names={names} /></section>
-        <StandardSettings me={me} />
-        <BillingCard />
-        {supervisors.data && supervisors.data.length > 0 && <ImportHours me={me} supervisors={supervisors.data} />}
-        <section className="card">
-          <h2>Supervisors</h2>
-          <ul className="people">{supervisors.data?.map(s => (
-            <li key={s.id}>
-              <strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span>
-              {finals.data?.find(f => f.supervisorId === s.id) && (finals.data.find(f => f.supervisorId === s.id)!.valid
-                ? <span className="ok small">✓ Final form signed</span> : <span className="warn small">Final form needs re-signing (more months count now)</span>)}
-              {!s.endsOn && <EndSupervision supervisor={s} />}
-              <button className="ghost small" onClick={() => void download(`/final/form.pdf?supervisorId=${s.id}`, `BACB final fieldwork verification ${s.fullName}.pdf`).catch(e => alert(e.message))}>Final form (PDF)</button>
-            </li>
-          ))}</ul>
-          <LinkSupervisor />
-        </section>
-      </div>
+      <details className="card more" id="more">
+        <summary><h2>Supervisors, settings and more</h2></summary>
+        <div className="cols">
+          <section className="card">
+            <h2>Supervisors</h2>
+            <ul className="people">{supervisors.data?.map(s => (
+              <li key={s.id}>
+                <strong>{s.fullName}</strong><span className="muted small">since {s.startsOn}{s.endsOn ? ` · until ${s.endsOn}` : ''}</span>
+                {finals.data?.find(f => f.supervisorId === s.id) && (finals.data.find(f => f.supervisorId === s.id)!.valid
+                  ? <span className="ok small">✓ Final form signed</span> : <span className="warn small">Final form needs re-signing (more months count now)</span>)}
+                {!s.endsOn && <EndSupervision supervisor={s} />}
+                <button className="ghost small" onClick={() => void download(`/final/form.pdf?supervisorId=${s.id}`, `BACB final fieldwork verification ${s.fullName}.pdf`).catch(e => alert(e.message))}>Final form (PDF)</button>
+              </li>
+            ))}</ul>
+            <LinkSupervisor />
+          </section>
+          <StandardSettings me={me} />
+          <section className="card"><h2>Hours by month</h2><HoursTrend months={progress.data?.months ?? []} names={names} /></section>
+          {supervisors.data && supervisors.data.length > 0 && <ImportHours me={me} supervisors={supervisors.data} />}
+          <BillingCard />
+        </div>
+        <MonthChanges month={month} />
+      </details>
+      <TabBar />
     </AppShell>
   );
 }
@@ -211,10 +210,21 @@ function EntryForm({ month, profile, supervisors, entries, editing, copyOf, isLo
           </button>
         ))}
       </div>
-      <div className="row">
-        <label>Restricted hours<input type="number" min="0" step="0.05" value={d.restrictedHours} onChange={e => set('restrictedHours', e.target.value)} /></label>
-        {ready && !problems.length && <p className="muted small self-end">{hrs(durationMinutes(input))} h total · {hrs(durationMinutes(input) - input.restrictedMinutes)} h unrestricted</p>}
+      <div className="seg seg-3" role="radiogroup" aria-label="Activity type">
+        {([['unrestricted', 'Unrestricted', 'Planning, data, analysis'], ['restricted', 'Restricted', 'Direct therapy'], ['mixed', 'Mixed', 'Some of each']] as const).map(([k, label, hint]) => (
+          <button type="button" key={k} role="radio" aria-checked={d.rMode === k} className={d.rMode === k ? `on ${k}` : ''} onClick={() => set('rMode', k)}>{label}<small>{hint}</small></button>
+        ))}
       </div>
+      <div className="row">
+        {d.rMode === 'mixed' && <label>Restricted hours<input type="number" min="0" step="0.05" value={d.restrictedHours} onChange={e => set('restrictedHours', e.target.value)} /></label>}
+        <label>Task list area (optional)
+          <select value={d.taskArea ?? ''} onChange={e => set('taskArea', (e.target.value || null) as Draft['taskArea'])}>
+            <option value="">None</option>
+            {Object.entries(TASK_AREAS).map(([k, v]) => <option key={k} value={k}>{k}. {v}</option>)}
+          </select>
+        </label>
+      </div>
+      {ready && !problems.length && <p className="muted small">{hrs(durationMinutes(input))} h total · {hrs(input.restrictedMinutes)} h restricted · {hrs(durationMinutes(input) - input.restrictedMinutes)} h unrestricted</p>}
       {d.kind === 'independent' && (
         <label className="check">
           <input type="checkbox" checked={d.observedAsync} onChange={e => set('observedAsync', e.target.checked)} />
