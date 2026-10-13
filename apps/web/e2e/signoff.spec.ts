@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
-import { call, logEntry, seedPair, signInAs } from './helpers';
+import { call, logEntry, seedPair, signInAs, openMore } from './helpers';
 
 test('signup through UI, link by code, log a full month, both sign, month locks', async ({ browser }) => {
   // Supervisor signs up in the UI
@@ -33,16 +33,17 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   await logEntry(page, '2026-09-03', '09:00', '10:30', 'Supervised', 'observation');
   for (const d of ['04', '05', '06', '07', '08']) await logEntry(page, `2026-09-${d}`, '09:00', '09:30', 'Supervised', 'contact');
   await expect(page.locator('.sync')).toHaveText('✓ Synced');
-  await expect(page.locator('.checklist li.no')).toHaveCount(0);
+  await expect(page.locator('.left-col.month .pill.bad')).toHaveCount(0);
   await expect(page.getByText('BCBA · Concentrated · 2027 rules')).toBeVisible();
-  await expect(page.locator('.ring', { hasText: 'Contacts' })).toHaveCount(0); // not required under 2027
+  await expect(page.locator('.left-row', { hasText: 'Supervisor contacts' })).toHaveCount(0); // not required under 2027
 
   // Switching to the 2022 standard re-checks the same month: contacts and the 10% target come back
+  await openMore(page);
   await page.getByLabel('When will you apply for certification?').selectOption('2022');
-  await expect(page.locator('.ring', { hasText: 'Contacts' })).toHaveCount(1);
-  await expect(page.locator('.ring', { hasText: 'Supervision (10%)' })).toHaveCount(1);
+  await expect(page.locator('.left-row', { hasText: 'Supervisor contacts' })).toHaveCount(1);
+  await expect(page.locator('.left-row', { hasText: 'Supervision (10% min)' })).toHaveCount(1);
   await page.getByLabel('When will you apply for certification?').selectOption('2027');
-  await expect(page.locator('.ring', { hasText: 'Supervision (7.5%)' })).toHaveCount(1);
+  await expect(page.locator('.left-row', { hasText: 'Supervision (7.5% min)' })).toHaveCount(1);
 
   await expect(page.locator('.people').getByText(/Sign by|Due in|Past the BACB deadline/)).toBeVisible();
   await page.getByRole('button', { name: /^Sign Sep/ }).click();
@@ -78,6 +79,7 @@ test('signup through UI, link by code, log a full month, both sign, month locks'
   await supPage.getByRole('button', { name: 'Sign final form', exact: true }).click();
   await expect(supPage.getByText(/✓ Signed .*Signing more months afterward/)).toBeVisible();
   await page.reload();
+  await openMore(page);
   await expect(page.getByText('✓ Final form signed')).toBeVisible();
   const [final] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Final form (PDF)' }).click()]);
   expect(final.suggestedFilename()).toBe('BACB final fieldwork verification Lorinda Otto.pdf');
@@ -109,9 +111,9 @@ test('each supervisor’s form is checked on its own', async ({ page }) => {
   const tabs = page.getByRole('radiogroup', { name: 'Verification form' }).getByRole('radio');
   await expect(tabs).toHaveCount(2);
   await tabs.filter({ hasText: 'Sam Second' }).click(); // order follows supervisor ids, so pick by name
-  await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(1);
+  await expect(page.locator('.left-row', { hasText: /^Hours \(/ }).locator('.pill.bad')).toHaveCount(1);
   await tabs.filter({ hasText: 'Lorinda Otto' }).click();
-  await expect(page.locator('.checklist li.no', { hasText: 'Minimum 20 hours' })).toHaveCount(0);
+  await expect(page.locator('.left-row', { hasText: /^Hours \(/ }).locator('.pill.bad')).toHaveCount(0);
 
   // Finish-by planner: next month is impossible for a whole program
   const ym = (add: number) => { const d = new Date(); d.setMonth(d.getMonth() + add, 1); return d.toLocaleDateString('en-CA').slice(0, 7) };
@@ -185,6 +187,7 @@ test('no code? the trainee invites their supervisor by link, who signs up and is
 
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Log hours' })).toBeVisible(); // can log right away now
+  await openMore(page);
   await expect(page.getByRole('listitem').filter({ hasText: /^Una Supervisorsince/ })).toBeVisible();
 });
 
@@ -196,6 +199,7 @@ test('imports hours from a CSV, skips bad rows, and never duplicates on re-impor
     '9/3/2026,9:00,8:00,Independent,,Backwards\n';
   const file = { name: 'ripley-export.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) };
   await signInAs(page, trainee, '/app?month=2026-09');
+  await openMore(page);
   for (let i = 0; i < 2; i++) {
     await page.getByLabel('CSV file').setInputFiles(file);
     await expect(page.getByText(/2\s*ready to import,\s*1\s*with problems/)).toBeVisible();
@@ -215,12 +219,12 @@ test('a past month nobody signed in time counts nothing until it is recorded as 
   for (const d of [2, 3]) await put({ workDate: `2026-08-0${d}`, startTime: '09:00', endTime: '11:00', kind: 'supervised', contact: 'observation' });
   await signInAs(page, trainee, '/app?month=2026-08'); // due 2026-09-30, long past
   await expect(page.getByText(/wasn't signed by 2026-09-30/)).toBeVisible();
-  await expect(page.locator('.ring', { hasText: 'Countable total' }).locator('.ring-value')).toHaveText('0');
+  await expect(page.locator('.left-big')).toContainText('· 0 counted');
   await page.getByRole('button', { name: 'Signed outside Fieldtrack…' }).click();
   await page.getByLabel('Date both of you had signed').fill('2026-09-20');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByText(/✓ Signed outside Fieldtrack 2026-09-20/)).toBeVisible();
-  await expect(page.locator('.ring', { hasText: 'Countable total' }).locator('.ring-value')).toHaveText('22');
+  await expect(page.locator('.left-big')).toContainText('· 22 counted');
 });
 
 test('a double-tap saves one entry, and out-of-range dates are caught before saving', async ({ page }) => {

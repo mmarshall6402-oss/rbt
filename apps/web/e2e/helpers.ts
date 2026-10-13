@@ -28,3 +28,9 @@ export async function logEntry(page: Page, date: string, start: string, end: str
   if (contact) await page.getByLabel('Contact type').selectOption(contact);
   await page.getByRole('button', { name: 'Save entry' }).click();
 }
+
+/** Opens the collapsed "Supervisors, settings and more" section on the trainee dashboard. */
+export async function openMore(page: Page) {
+  const more = page.locator('details.more');
+  if (!(await more.evaluate(e => (e as HTMLDetailsElement).open))) await more.locator('summary').click();
+}

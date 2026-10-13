@@ -9,18 +9,18 @@ test('offline-first: instant save, survives offline reload, syncs once, retries 
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.waitForTimeout(1500); // first visit: let the service worker finish caching the app shell
 
-  const hours = page.locator('.ring', { hasText: 'Hours this month' }).locator('.ring-value');
+  const hours = page.locator('.left-row', { hasText: /^Hours \(/ }).locator('.left-value');
   await logEntry(page, '2026-10-05', '08:00', '10:00');
   await expect.poll(serverCount).toBe(1);
 
   await context.setOffline(true);
   await logEntry(page, '2026-10-05', '11:00', '14:00');
-  await expect(hours).toHaveText('5.00'); // rings update instantly from the shared rules engine
+  await expect(hours).toHaveText('5.00 h'); // totals update instantly from the shared rules engine
   await expect(page.locator('.sync')).toHaveText('☁ Saved on this device · 1 waiting');
 
   await page.waitForTimeout(1000);
   await page.reload(); // app shell from the service worker, data from IndexedDB
-  await expect(hours).toHaveText('5.00');
+  await expect(hours).toHaveText('5.00 h');
   await expect(page.locator('td [title^="Saved on this device"]')).toHaveCount(1);
 
   await context.setOffline(false);
