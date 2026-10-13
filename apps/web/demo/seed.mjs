@@ -18,6 +18,6 @@ console.log('entries',n);
 
 await call(T,'/external-signatures','PUT',{supervisorId:sid,month:'2026-07',signedOn:'2026-08-05'});
 await call(T,'/external-signatures','PUT',{supervisorId:sid,month:'2026-08',signedOn:'2026-09-04'});
-const t=me;
+const t=await call(T,'/me');
 await call(T,'/verifications/2026-09/sign','POST',{supervisorId:sid,signature:'Mom Marshall',attest:true});
 console.log('signed sep trainee; trainee id',t.id);
