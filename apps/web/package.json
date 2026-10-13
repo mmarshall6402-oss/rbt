@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "echo 'no web tests yet'",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "demo": "vite build --config demo/vite.config.ts"
   },
   "dependencies": {
     "@fieldtrack/rules": "workspace:*",
