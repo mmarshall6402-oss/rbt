@@ -1,0 +1,36 @@
+name: CodeQL
+
+# Static analysis of our own JavaScript/TypeScript for security bugs (injection, unsafe redirects, prototype pollution...).
+# Findings appear under the repo's Security tab → Code scanning, and as annotations on pull requests.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 6 * * 1' # weekly, so new CodeQL queries also run against code that hasn't changed
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL (JavaScript/TypeScript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload results to code scanning
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: github/codeql-action/init@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
+        with:
+          languages: javascript-typescript
+          build-mode: none # JS/TS is analyzed from source; nothing to compile
+          queries: security-extended
+      - uses: github/codeql-action/analyze@9f759ee644a3e7c15c1390abf49868036c00067b # v3.38.3
+        with:
+          category: /language:javascript-typescript
