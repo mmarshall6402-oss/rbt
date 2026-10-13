@@ -155,8 +155,8 @@ tr.desc td { white-space: normal; color: var(--muted); font-size: 13px; padding-
 .center-text { text-align: center; }
 label.inline { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; }
 .pace p { margin: 4px 0; }
-label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
-label.check input { width: auto; }
+label.check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+label.check input { width: auto; flex: none; margin: 0; accent-color: var(--ink); }
 .comments { gap: 6px; }
 .comment { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
 .comment.resolved { color: var(--muted); }
