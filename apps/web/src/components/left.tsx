@@ -3,14 +3,16 @@ import { durationMinutes, formatHours, signDeadline, targetsFor, type MonthResul
 import type { EntryDto } from '../api';
 import { currentMonth, dateLabel, hrs, monthLabel, standardLabel, time12 } from './ui';
 
+/** Half-filled circle drawn in CSS: the ◐ glyph is missing or tiny in many system fonts. */
+const Half = () => <span className="half" aria-hidden />;
 const whole = (min: number) => Number(formatHours(min, 0)).toLocaleString();
-type Status = 'good' | 'bad' | 'info';
+type Status = 'good' | 'bad' | 'part' | 'info';
 function Row({ label, value, status, note }: { label: string; value: string; status: Status; note: string }) {
   return (
     <li className="left-row">
       <span className="left-label">{label}</span>
       <span className="left-value">{value}</span>
-      <span className={`pill ${status}`}>{status === 'good' ? '✓ ' : status === 'bad' ? '✗ ' : ''}{note}</span>
+      <span className={`pill ${status}`}>{status === 'good' ? '✓ ' : status === 'bad' ? '✗ ' : status === 'part' ? <><Half /> </> : ''}{note}</span>
     </li>
   );
 }
@@ -41,7 +43,7 @@ export function HoursLeft({ program, m, profile, lost }: { program: ProgramResul
         <p className="standard">{standardLabel(profile)}</p>
         <div className="left-big"><strong>{whole(totalLeft)}</strong> h left <span className="muted small">· {whole(program.countableMinutes)} counted</span></div>
         <ul className="left-list">
-          <Row label="Unrestricted" value={`${whole(unres)} h`} status={needUnres ? 'bad' : 'good'} note={needUnres ? `${whole(needUnres)} h left (${t.rules.minUnrestrictedPercent}% min)` : `${t.rules.minUnrestrictedPercent}% met`} />
+          <Row label="Unrestricted" value={`${whole(unres)} h`} status={unres * 100 < t.rules.minUnrestrictedPercent * (unres + restricted) ? 'bad' : needUnres ? 'part' : 'good'} note={needUnres ? `${whole(needUnres)} h left (${t.rules.minUnrestrictedPercent}% min)` : `${t.rules.minUnrestrictedPercent}% met`} />
           <Row label="Restricted" value={`${whole(restricted)} h`} status={roomRestricted ? 'info' : 'bad'} note={roomRestricted ? `${whole(roomRestricted)} h more can count` : 'at the 40% max'} />
         </ul>
       </div>
@@ -50,8 +52,10 @@ export function HoursLeft({ program, m, profile, lost }: { program: ProgramResul
         <p className="standard">Checked as <strong>{profile.type === 'concentrated' ? 'Concentrated' : 'Supervised'}</strong> fieldwork: {t.rules.minMonthlyMinutes / 60}–{t.rules.maxMonthlyMinutes / 60} h, {t.supervisionPerMille / 10}% supervised{t.minContacts ? `, ${t.minContacts} contacts` : ''}</p>
         {lost && <p className="pill bad block">✗ This form wasn't signed by {signDeadline(m.month)}, so per the BACB none of its hours count. Signed it elsewhere in time? Record that under Monthly sign-off.</p>}
         <ul className="left-list">
-          <Row label={`Hours (${t.rules.minMonthlyMinutes / 60}–${t.rules.maxMonthlyMinutes / 60} h)`} value={`${hrs(s.totalMinutes)} h`} status={by.minHours?.ok && by.maxHours?.ok ? 'good' : 'bad'}
-            note={!by.minHours?.ok ? `${hrs(by.minHours?.needed ?? 0)} h left to ${t.rules.minMonthlyMinutes / 60}` : !by.maxHours?.ok ? `${hrs(by.maxHours?.needed ?? 0)} h over max` : `${hrs(t.rules.maxMonthlyMinutes - s.totalMinutes)} h room`} />
+          <Row label={`Hours (${t.rules.minMonthlyMinutes / 60}–${t.rules.maxMonthlyMinutes / 60} h)`} value={`${hrs(s.totalMinutes)} of ${t.rules.maxMonthlyMinutes / 60} h`}
+            status={!by.minHours?.ok || !by.maxHours?.ok ? 'bad' : s.totalMinutes >= t.rules.maxMonthlyMinutes ? 'good' : 'part'}
+            note={!by.minHours?.ok ? `${hrs(by.minHours?.needed ?? 0)} h left to ${t.rules.minMonthlyMinutes / 60}` : !by.maxHours?.ok ? `${hrs(by.maxHours?.needed ?? 0)} h over max`
+              : s.totalMinutes >= t.rules.maxMonthlyMinutes ? 'full' : `${hrs(t.rules.maxMonthlyMinutes - s.totalMinutes)} h left to ${t.rules.maxMonthlyMinutes / 60}`} />
           <Row label={`Supervision (${t.supervisionPerMille / 10}% min)`} value={`${hrs(s.supervisedMinutes)} h · ${pct.toFixed(1)}%`} status={by.supervision?.ok ? 'good' : 'bad'}
             note={by.supervision?.ok ? 'met' : s.totalMinutes ? `${hrs(by.supervision?.needed ?? 0)} h more` : 'none yet'} />
           {by.contacts && <Row label={`Supervisor contacts (${t.minContacts} min)`} value={`${s.contacts} of ${t.minContacts}`} status={by.contacts.ok ? 'good' : 'bad'} note={by.contacts.ok ? 'met' : `${by.contacts.needed} more`} />}
@@ -66,27 +70,32 @@ export function HoursLeft({ program, m, profile, lost }: { program: ProgramResul
   );
 }
 
-/** One chip per month: green ✓ when every form counts in full, red ✗ when anything doesn't. Tap to open that month. */
-export function MonthStrip({ program, month, onPick }: { program: ProgramResult; month: string; onPick: (m: string) => void }) {
-  const now = currentMonth(), ref = useRef<HTMLDivElement>(null);
+/** One chip per month: ✓ full (counts, at the monthly max), ◐ counts but under the max, ✗ doesn't count. Tap to open. */
+export function MonthStrip({ program, profile, month, onPick }: { program: ProgramResult; profile: Profile; month: string; onPick: (m: string) => void }) {
+  const now = currentMonth(), ref = useRef<HTMLDivElement>(null), max = targetsFor(profile).rules.maxMonthlyMinutes;
   const byMonth = new Map<string, MonthResult[]>();
   for (const m of program.months) byMonth.set(m.month, [...(byMonth.get(m.month) ?? []), m]);
   if (!byMonth.has(now)) byMonth.set(now, []);
   const months = [...byMonth.keys()].sort();
   useEffect(() => { ref.current?.scrollTo({ left: ref.current.scrollWidth }) }, [months.length]);
   return (
-    <nav className="month-strip" ref={ref} aria-label="Months">
-      {months.map(k => {
-        const forms = byMonth.get(k)!, ok = forms.length > 0 && forms.every(f => f.passed && counts(f));
-        const state = k === now ? 'now' : ok ? 'good' : 'bad';
-        const why = k === now ? 'in progress' : !forms.length ? 'no hours' : ok ? 'counts' : forms.some(f => f.lost) ? 'not signed in time' : forms.some(f => counts(f)) ? 'partly counts' : "doesn't count";
-        return (
-          <button key={k} type="button" className={`chip ${state}${k === month ? ' on' : ''}`} aria-current={k === month ? 'true' : undefined} aria-label={`${monthLabel(k)}: ${why}`} title={why} onClick={() => onPick(k)}>
-            <span aria-hidden>{state === 'good' ? '✓' : state === 'bad' ? '✗' : '•'}</span>{monthLabel(k, true)}
-          </button>
-        );
-      })}
-    </nav>
+    <div className="stack tight">
+      <nav className="month-strip" ref={ref} aria-label="Months">
+        {months.map(k => {
+          const forms = byMonth.get(k)!, ok = forms.length > 0 && forms.every(f => f.passed && counts(f));
+          const total = Math.max(0, ...forms.map(f => f.summary.totalMinutes)), full = total >= max;
+          const state = !ok ? (k === now ? 'now' : 'bad') : full ? 'good' : 'part';
+          const why = !forms.length ? 'no hours yet' : ok ? (full ? 'counts · full' : `counts · ${hrs(max - total)} h left to ${max / 60}`)
+            : k === now ? 'in progress' : forms.some(f => f.lost) ? 'not signed in time' : forms.some(f => counts(f)) ? 'partly counts' : "doesn't count";
+          return (
+            <button key={k} type="button" className={`chip ${state}${k === month ? ' on' : ''}`} aria-current={k === month ? 'true' : undefined} aria-label={`${monthLabel(k)}: ${why}`} title={why} onClick={() => onPick(k)}>
+              {state === 'part' ? <Half /> : <span aria-hidden>{{ good: '✓', bad: '✗', now: '•' }[state]}</span>}{monthLabel(k, true)}<small>{whole(total)}/{max / 60}</small>
+            </button>
+          );
+        })}
+      </nav>
+      <p className="muted small legend"><span className="good">✓ full ({max / 60} h)</span> <span className="part"><Half /> counts, under {max / 60} h</span> <span className="bad">✗ doesn't count</span></p>
+    </div>
   );
 }
 

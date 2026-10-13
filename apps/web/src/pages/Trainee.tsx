@@ -59,7 +59,7 @@ export function TraineeDashboard({ me }: { me: Me }) {
         </div>
       )}
 
-      {progress.data && <MonthStrip program={progress.data} month={month} onPick={setMonth} />}
+      {progress.data && <MonthStrip program={progress.data} profile={profile} month={month} onPick={setMonth} />}
       {progress.data && result.data && <HoursLeft program={progress.data} m={result.data} profile={{ ...profile, ...signedStd(month, form?.supervisorId), type: result.data.type ?? profile.type }} lost={lost} />}
       {!result.data && <ErrorText error={result.error} />}
 

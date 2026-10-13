@@ -1,19 +1,19 @@
 :root {
   --bg: #ffffff; --surface: #fafafa; --ink: #0b0b0b; --ink-2: #3a3a3a; --muted: #6b6b6b;
   --line: #e7e7e7; --track: #ececec; --fill: #0b0b0b; --hover: #f2f2f2; --on-fill: #ffffff;
-  --good: #15803d; --bad: #c62828; --good-bg: #e9f6ee; --bad-bg: #fdeceb;
+  --good: #15803d; --bad: #c62828; --good-bg: #e9f6ee; --bad-bg: #fdeceb; --part: #9a5b00; --part-bg: #fff4e0;
   --radius: 14px; --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0a0a0a; --surface: #131313; --ink: #f4f4f4; --ink-2: #d0d0d0; --muted: #9a9a9a;
-    --line: #262626; --track: #242424; --fill: #f4f4f4; --hover: #1c1c1c; --on-fill: #0a0a0a; --good: #4ade80; --bad: #f87171; --good-bg: #10261a; --bad-bg: #2c1414; color-scheme: dark;
+    --line: #262626; --track: #242424; --fill: #f4f4f4; --hover: #1c1c1c; --on-fill: #0a0a0a; --good: #4ade80; --bad: #f87171; --good-bg: #10261a; --bad-bg: #2c1414; --part: #fbbf24; --part-bg: #2a2010; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0a0a0a; --surface: #131313; --ink: #f4f4f4; --ink-2: #d0d0d0; --muted: #9a9a9a;
-  --line: #262626; --track: #242424; --fill: #f4f4f4; --hover: #1c1c1c; --on-fill: #0a0a0a; --good: #4ade80; --bad: #f87171; --good-bg: #10261a; --bad-bg: #2c1414; color-scheme: dark;
+  --line: #262626; --track: #242424; --fill: #f4f4f4; --hover: #1c1c1c; --on-fill: #0a0a0a; --good: #4ade80; --bad: #f87171; --good-bg: #10261a; --bad-bg: #2c1414; --part: #fbbf24; --part-bg: #2a2010; color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -205,3 +205,10 @@ details.more .card { background: var(--bg); }
 .progress-track { height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; }
 .progress-track > div { height: 100%; background: var(--fill); border-radius: inherit; transition: width .4s ease; }
 @media (prefers-reduced-motion: reduce) { .progress-track > div { transition: none; } }
+.pill.part { background: var(--part-bg); color: var(--part); }
+.chip.part { color: var(--part); border-color: var(--part); background: var(--part-bg); }
+.chip small { font-weight: 500; margin-left: 2px; font-variant-numeric: tabular-nums; }
+.stack.tight { gap: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; }
+.legend .good { color: var(--good); } .legend .part { color: var(--part); } .legend .bad { color: var(--bad); }
+.half { display: inline-block; width: 0.72em; height: 0.72em; border-radius: 50%; border: 1.5px solid currentColor; background: linear-gradient(90deg, currentColor 50%, transparent 50%); vertical-align: -0.05em; }

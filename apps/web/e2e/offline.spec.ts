@@ -15,12 +15,12 @@ test('offline-first: instant save, survives offline reload, syncs once, retries 
 
   await context.setOffline(true);
   await logEntry(page, '2026-10-05', '11:00', '14:00');
-  await expect(hours).toHaveText('5.00 h'); // totals update instantly from the shared rules engine
+  await expect(hours).toHaveText(/^5\.00 of /); // totals update instantly from the shared rules engine
   await expect(page.locator('.sync')).toHaveText('☁ Saved on this device · 1 waiting');
 
   await page.waitForTimeout(1000);
   await page.reload(); // app shell from the service worker, data from IndexedDB
-  await expect(hours).toHaveText('5.00 h');
+  await expect(hours).toHaveText(/^5\.00 of /);
   await expect(page.locator('td [title^="Saved on this device"]')).toHaveCount(1);
 
   await context.setOffline(false);
