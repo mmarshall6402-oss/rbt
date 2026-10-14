@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Build from the repo root: docker build -f apps/api/Dockerfile .
-FROM node:22-slim AS build
+FROM node:26-slim AS build
 RUN corepack enable
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -12,7 +12,7 @@ COPY packages/rules packages/rules
 COPY apps/api apps/api
 RUN pnpm --filter @fieldtrack/api build && pnpm --filter @fieldtrack/api forms && pnpm --filter @fieldtrack/api deploy --prod --legacy /out
 
-FROM node:22-slim
+FROM node:26-slim
 # Patch OS packages the base image is behind on, and drop npm/corepack: the app only ever runs `node`,
 # and their bundled dependencies are the bulk of the image's known vulnerabilities.
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/* \
