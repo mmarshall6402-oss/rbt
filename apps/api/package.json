@@ -14,6 +14,7 @@
   "dependencies": {
     "@aws-sdk/client-sesv2": "^3.1147.0",
     "@aws-sdk/rds-signer": "^3.1147.0",
+    "@fastify/static": "^8.3.0",
     "@fieldtrack/rules": "workspace:*",
     "@sentry/node": "^11.4.0",
     "aws-jwt-verify": "^5.2.1",

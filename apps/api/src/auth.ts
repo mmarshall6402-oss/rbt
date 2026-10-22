@@ -20,9 +20,9 @@ export function cognitoVerify(userPoolId: string, clientId: string): Verify {
   };
 }
 
-/** Local dev only: trusts an `x-dev-sub` header (used as the email too). Refuses to run in production. */
+/** Trusts an `x-dev-sub` header (used as the email too). Local dev, or behind the shared site password (site.ts). */
 export function devVerify(): Verify {
-  if (process.env.NODE_ENV === 'production') throw new Error('Dev auth is not allowed in production');
+  if (process.env.NODE_ENV === 'production' && process.env.AUTH_MODE !== 'site') throw new Error('Dev auth is not allowed in production');
   return async req => {
     const sub = req.headers['x-dev-sub'];
     return typeof sub === 'string' && sub ? { sub, email: sub } : null;

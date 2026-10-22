@@ -1,0 +1,15 @@
+# Render Blueprint for a free test deploy (see deploy/render/README.md). Production runs on AWS (infra/).
+services:
+  - type: web
+    name: fieldtrack
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/render/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL # Neon connection string (Postgres 16+), entered in the Render dashboard
+        sync: false
+      - key: SITE_PASSWORD # the one password your testers type; Render generates a strong one
+        generateValue: true
