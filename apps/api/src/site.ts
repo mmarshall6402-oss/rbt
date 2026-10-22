@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import fastifyStatic from '@fastify/static';
@@ -18,17 +18,16 @@ export function siteFromEnv(env = process.env): SiteOptions | undefined {
   return { password, webDir: env.WEB_DIR ?? '/app/web' };
 }
 
-const digest = (s: string) => createHash('sha256').update(s).digest();
-
 /** Call before any routes are added: Fastify applies hooks to routes registered after them. */
 export function registerSite(app: FastifyInstance, { password, webDir }: SiteOptions) {
-  const expected = digest(password);
+  const expected = Buffer.from(password);
   // Browser Basic auth: the browser asks once, then sends it with every same-origin request (including the app's API calls).
   app.addHook('onRequest', async (req, reply) => {
     if (req.url === '/api/health') return; // the host's health check
     const [scheme, value] = (req.headers.authorization ?? '').split(' ');
-    const given = scheme === 'Basic' && value ? Buffer.from(value, 'base64').toString().split(':').slice(1).join(':') : '';
-    if (!timingSafeEqual(digest(given), expected)) {
+    const given = Buffer.from(scheme === 'Basic' && value ? Buffer.from(value, 'base64').toString().split(':').slice(1).join(':') : '');
+    // Constant-time for equal lengths; a length mismatch only reveals the length of a 12+ char random password.
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
       return reply.code(401).header('www-authenticate', 'Basic realm="Fieldtrack", charset="UTF-8"').send({ error: 'Site password required' });
     }
   });
