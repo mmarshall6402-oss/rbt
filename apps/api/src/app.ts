@@ -5,6 +5,7 @@ import { z, ZodError } from 'zod';
 import { ATTESTATIONS, FINAL_ATTESTATIONS, RULESETS, deadlineDay, formLost, durationMinutes, evaluateMonth, signatureMatches, evaluateProgram, findOverlaps, validateEntry, TASK_AREAS, type TaskArea, type Entry, type FieldworkType, type Edition, type FormStandard, type Profile } from '@fieldtrack/rules';
 import type { Verify } from './auth.js';
 import { errorTracking } from './observability.js';
+import { registerSite, type SiteOptions } from './site.js';
 import { fillFinalForm, fillMonthlyForm, type TypeTotals } from './forms.js';
 import { hoursLogPdf } from './hourslog.js';
 import { stripeWebhook, type Billing } from './billing.js';
@@ -98,10 +99,11 @@ const toCsv = (rows: unknown[][]) => rows.map(r => r.map(csvCell).join(',')).joi
 const publicEntry = ({ traineeId, organizationId, deletedAt, ...e }: EntryRow) => e;
 const publicUser = ({ cognitoSub, ...u }: User) => u;
 
-export function buildApp({ db, verify, logger = true, billing, clock = () => new Date() }: { db: Kysely<DB>; verify: Verify; logger?: boolean; billing?: Billing | undefined; clock?: () => Date }) {
+export function buildApp({ db, verify, logger = true, billing, clock = () => new Date(), site }: { db: Kysely<DB>; verify: Verify; logger?: boolean; billing?: Billing | undefined; clock?: () => Date; site?: SiteOptions | undefined }) {
   const today = () => clock().toISOString().slice(0, 10); // injectable so deadline rules are testable
   // Never log bodies: descriptions are PHI.
   const app = Fastify({ logger: logger && { redact: ['req.headers.authorization', 'req.headers["x-dev-sub"]'] } });
+  if (site) registerSite(app, site);
 
   app.setErrorHandler((err, req, reply) => {
     const code = (err as { code?: string }).code;

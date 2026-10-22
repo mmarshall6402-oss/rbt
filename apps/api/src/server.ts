@@ -6,11 +6,13 @@ import { cognitoVerify, devVerify } from './auth.js';
 import { billingFromEnv } from './billing.js';
 import { apiPoolConfig } from './config.js';
 import { createDb } from './db.js';
+import { siteFromEnv } from './site.js';
 
 const env = (k: string) => { const v = process.env[k]; if (!v) throw new Error(`Missing env ${k}`); return v };
 
-const verify = process.env.AUTH_MODE === 'dev' ? devVerify() : cognitoVerify(env('COGNITO_USER_POOL_ID'), env('COGNITO_CLIENT_ID'));
-const app = buildApp({ db: createDb(apiPoolConfig()), verify, billing: billingFromEnv() });
+const site = siteFromEnv(); // AUTH_MODE=site: shared-password test deploy that also serves the web app
+const verify = process.env.AUTH_MODE === 'dev' || site ? devVerify() : cognitoVerify(env('COGNITO_USER_POOL_ID'), env('COGNITO_CLIENT_ID'));
+const app = buildApp({ db: createDb(apiPoolConfig()), verify, billing: billingFromEnv(), site });
 await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
 
 // ECS sends SIGTERM on deploys: finish in-flight requests, then exit.
