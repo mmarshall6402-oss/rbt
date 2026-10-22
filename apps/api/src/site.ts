@@ -45,7 +45,7 @@ export function registerSite(app: FastifyInstance, { password, webDir }: SiteOpt
   if (!existsSync(join(webDir, 'index.html'))) throw new Error(`No web build at ${webDir}`);
   void app.register(fastifyStatic, {
     root: webDir, wildcard: false, index: false, cacheControl: false,
-    setHeaders: (res, path) => res.setHeader('cache-control', path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'),
+    setHeaders: (reply, path) => reply.header('cache-control', path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache'),
   });
   // Client-side routes (/app, /supervise/...) get the app shell; unknown API paths stay JSON 404s.
   app.setNotFoundHandler((req, reply) =>
